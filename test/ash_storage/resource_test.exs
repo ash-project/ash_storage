@@ -58,7 +58,7 @@ defmodule AshStorage.ResourceTest do
                Info.service_for_attachment(AshStorage.Test.Post, att)
     end
 
-    test "app config overrides DSL service" do
+    test "resource-level app config overrides DSL service" do
       {:ok, att} = Info.attachment(AshStorage.Test.ConfigurablePost, :avatar)
 
       Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
@@ -66,6 +66,22 @@ defmodule AshStorage.ResourceTest do
       )
 
       assert {:ok, {AshStorage.Service.Disk, [root: "/tmp/override"]}} =
+               Info.service_for_attachment(AshStorage.Test.ConfigurablePost, att)
+    after
+      Application.delete_env(:ash_storage, AshStorage.Test.ConfigurablePost)
+    end
+
+    test "per-attachment app config overrides resource-level config" do
+      {:ok, att} = Info.attachment(AshStorage.Test.ConfigurablePost, :avatar)
+
+      Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
+        storage: [
+          service: {AshStorage.Service.Disk, [root: "/tmp/default"]},
+          has_one_attached: [avatar: [service: {AshStorage.Service.Disk, [root: "/tmp/avatar"]}]]
+        ]
+      )
+
+      assert {:ok, {AshStorage.Service.Disk, [root: "/tmp/avatar"]}} =
                Info.service_for_attachment(AshStorage.Test.ConfigurablePost, att)
     after
       Application.delete_env(:ash_storage, AshStorage.Test.ConfigurablePost)
