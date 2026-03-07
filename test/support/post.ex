@@ -25,5 +25,21 @@ defmodule AshStorage.Test.Post do
 
   actions do
     defaults [:read, :destroy, create: [:title], update: [:title]]
+
+    create :create_with_image do
+      accept [:title]
+      argument :cover_image, :file, allow_nil?: true
+
+      change {AshStorage.Resource.Changes.AttachFile,
+              argument: :cover_image, attachment: :cover_image}
+    end
+
+    update :update_cover_image do
+      require_atomic? false
+      argument :cover_image, :file, allow_nil?: true
+
+      change {AshStorage.Resource.Changes.AttachFile,
+              argument: :cover_image, attachment: :cover_image}
+    end
   end
 end
