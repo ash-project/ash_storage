@@ -1,11 +1,15 @@
 # AshStorage
 
-**TODO: Add description**
+[![CI](https://github.com/ash-project/ash_storage/actions/workflows/elixir.yml/badge.svg)](https://github.com/ash-project/ash_storage/actions/workflows/elixir.yml)
+[![Hex version](https://img.shields.io/hexpm/v/ash_storage.svg)](https://hex.pm/packages/ash_storage)
+
+An [Ash](https://hexdocs.pm/ash) extension for file storage, attachments, and variants.
+
+AshStorage provides a consistent interface for uploading, storing, and serving files across multiple storage backends (local disk, S3, GCS, Azure). It includes support for file analysis, image variants, previews, and direct uploads.
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `ash_storage` to your list of dependencies in `mix.exs`:
+Add `ash_storage` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
@@ -15,7 +19,7 @@ def deps do
 end
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/ash_storage>.
+## Documentation
 
+- [HexDocs](https://hexdocs.pm/ash_storage)
+- [Ash Framework](https://hexdocs.pm/ash)

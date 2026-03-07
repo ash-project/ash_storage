@@ -1,0 +1,5 @@
+[
+  tools: [
+    {:doctor, false}
+  ]
+]

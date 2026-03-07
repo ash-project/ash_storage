@@ -1,29 +1,155 @@
 defmodule AshStorage.MixProject do
   use Mix.Project
 
+  @description """
+  An Ash extension for file storage, attachments, and variants.
+  """
+
+  @version "0.1.0"
+
+  @source_url "https://github.com/ash-project/ash_storage"
+
   def project do
     [
       app: :ash_storage,
-      version: "0.1.0",
-      elixir: "~> 1.18",
+      version: @version,
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      package: package(),
+      aliases: aliases(),
+      deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env()),
+      dialyzer: [plt_add_apps: [:ash, :mix]],
+      docs: &docs/0,
+      description: @description,
+      source_url: @source_url,
+      homepage_url: "https://github.com/ash-project/ash_storage"
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
+  defp elixirc_paths(:test) do
+    elixirc_paths(:dev) ++ ["test/support"]
+  end
+
+  defp elixirc_paths(_) do
+    ["lib"]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extra_section: "GUIDES",
+      before_closing_head_tag: fn type ->
+        if type == :html do
+          """
+          <script>
+            if (location.hostname === "hexdocs.pm") {
+              var script = document.createElement("script");
+              script.src = "https://plausible.io/js/script.js";
+              script.setAttribute("defer", "defer")
+              script.setAttribute("data-domain", "ashhexdocs")
+              document.head.appendChild(script);
+            }
+          </script>
+          """
+        end
+      end,
+      extras: [
+        {"README.md", title: "Home"},
+        "CHANGELOG.md"
+      ],
+      groups_for_extras: [
+        Tutorials: ~r'documentation/tutorials',
+        "How To": ~r'documentation/how_to',
+        Topics: ~r'documentation/topics',
+        DSLs: ~r'documentation/dsls',
+        "About AshStorage": [
+          "CHANGELOG.md"
+        ]
+      ],
+      groups_for_modules: [
+        AshStorage: [
+          AshStorage
+        ],
+        Resources: [
+          AshStorage.Blob,
+          AshStorage.Attachment,
+          AshStorage.VariantRecord
+        ],
+        Services: [
+          AshStorage.Service,
+          AshStorage.Service.Disk,
+          AshStorage.Service.S3
+        ],
+        Analysis: [
+          AshStorage.Analyzer,
+          AshStorage.Transformer,
+          AshStorage.Previewer
+        ]
+      ]
+    ]
+  end
+
+  defp package do
+    [
+      maintainers: [
+        "Zach Daniel <zach@zachdaniel.dev>"
+      ],
+      licenses: ["MIT"],
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
+      links: %{
+        "GitHub" => @source_url,
+        "Discord" => "https://discord.gg/HTHRaaVPUc",
+        "Website" => "https://ash-hq.org",
+        "Forum" => "https://elixirforum.com/c/ash-framework-forum/",
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      }
+    ]
+  end
+
   def application do
     [
       extra_applications: [:logger]
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:igniter, "~> 0.6", only: [:dev, :test]}
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
+      {:ash, ash_version("~> 3.5")},
+      {:spark, "~> 2.2 and >= 2.2.10"},
+      {:igniter, "~> 0.5", optional: true},
+      {:jason, "~> 1.2"},
+      # dev/test dependencies
+      {:ex_doc, "~> 0.37-rc", only: [:dev, :test], runtime: false},
+      {:ex_check, "~> 0.12", only: [:dev, :test]},
+      {:credo, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:dialyxir, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:sobelow, ">= 0.0.0", only: [:dev, :test], runtime: false},
+      {:git_ops, "~> 2.5", only: [:dev, :test]},
+      {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
+      {:simple_sat, ">= 0.0.0", only: :test},
+      {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp ash_version(default_version) do
+    case System.get_env("ASH_VERSION") do
+      nil -> default_version
+      "local" -> [path: "../ash"]
+      "main" -> [git: "https://github.com/ash-project/ash.git"]
+      version -> "~> #{version}"
+    end
+  end
+
+  defp aliases do
+    [
+      sobelow: "sobelow -i",
+      credo: "credo --strict",
+      docs: [
+        "docs",
+        "spark.replace_doc_links"
+      ]
     ]
   end
 end
