@@ -35,6 +35,7 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
   defp add_actions({:ok, dsl_state}) do
     with {:ok, dsl_state} <-
            Ash.Resource.Builder.add_action(dsl_state, :create, :create,
+             primary?: true,
              accept: [
                :key,
                :filename,
@@ -45,8 +46,10 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
                :metadata
              ]
            ),
-         {:ok, dsl_state} <- Ash.Resource.Builder.add_action(dsl_state, :read, :read),
-         {:ok, dsl_state} <- Ash.Resource.Builder.add_action(dsl_state, :destroy, :destroy) do
+         {:ok, dsl_state} <-
+           Ash.Resource.Builder.add_action(dsl_state, :read, :read, primary?: true),
+         {:ok, dsl_state} <-
+           Ash.Resource.Builder.add_action(dsl_state, :destroy, :destroy, primary?: true) do
       Ash.Resource.Builder.add_action(dsl_state, :update, :update_metadata, accept: [:metadata])
     end
   end

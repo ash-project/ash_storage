@@ -56,7 +56,7 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
              attribute_writable?: true
            ) do
       Enum.reduce(belongs_to_resources, {:ok, dsl_state}, fn %{name: name, resource: resource},
-                                                              {:ok, dsl_state} ->
+                                                             {:ok, dsl_state} ->
         Ash.Resource.Builder.add_relationship(
           dsl_state,
           :belongs_to,
@@ -72,6 +72,7 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
 
   defp add_relationships({:error, error}, _, _), do: {:error, error}
 
+  # sobelow_skip ["DOS.BinToAtom"]
   defp add_actions({:ok, dsl_state}, belongs_to_resources) do
     accept =
       if belongs_to_resources == [] do
@@ -82,9 +83,13 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
       end
 
     with {:ok, dsl_state} <-
-           Ash.Resource.Builder.add_action(dsl_state, :create, :create, accept: accept),
-         {:ok, dsl_state} <- Ash.Resource.Builder.add_action(dsl_state, :read, :read) do
-      Ash.Resource.Builder.add_action(dsl_state, :destroy, :destroy)
+           Ash.Resource.Builder.add_action(dsl_state, :create, :create,
+             primary?: true,
+             accept: accept
+           ),
+         {:ok, dsl_state} <-
+           Ash.Resource.Builder.add_action(dsl_state, :read, :read, primary?: true) do
+      Ash.Resource.Builder.add_action(dsl_state, :destroy, :destroy, primary?: true)
     end
   end
 
