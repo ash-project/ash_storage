@@ -144,7 +144,7 @@ defmodule AshStorage.MixProject do
 
   defp aliases do
     [
-      sobelow: "sobelow -i",
+      sobelow: "sobelow --skip",
       credo: "credo --strict",
       docs: [
         "docs",

@@ -11,6 +11,8 @@ defmodule AshStorage.Test.Post do
 
   storage do
     service({AshStorage.Service.Test, []})
+    blob_resource(AshStorage.Test.Blob)
+    attachment_resource(AshStorage.Test.Attachment)
 
     has_one_attached(:cover_image)
     has_many_attached(:documents, dependent: :detach)

@@ -59,6 +59,17 @@ defmodule AshStorage.Resource do
         doc:
           "The default storage service for all attachments on this resource, as a `{module, opts}` tuple. Can be overridden per-attachment or via application config.",
         required: false
+      ],
+      blob_resource: [
+        type: :module,
+        required: true,
+        doc: "The blob resource module (must use `AshStorage.BlobResource` extension)."
+      ],
+      attachment_resource: [
+        type: :module,
+        required: true,
+        doc:
+          "The attachment resource module (must use `AshStorage.AttachmentResource` extension)."
       ]
     ],
     entities: [
