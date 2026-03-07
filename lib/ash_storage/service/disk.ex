@@ -12,6 +12,10 @@ defmodule AshStorage.Service.Disk do
 
   - `:root` - (required) the root directory for file storage
   - `:base_url` - (required for `url/2`) the base URL for serving files
+  - `:secret` - secret key for generating signed URLs. When set, `url/2`
+    returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
+    plug will verify before serving files.
+  - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
   """
 
   @behaviour AshStorage.Service
@@ -74,8 +78,23 @@ defmodule AshStorage.Service.Disk do
 
   @impl true
   def url(key, %AshStorage.Service.Context{} = ctx) do
-    base_url = Keyword.fetch!(ctx.service_opts, :base_url)
-    "#{base_url}/#{key}"
+    opts = ctx.service_opts
+    base_url = Keyword.fetch!(opts, :base_url)
+    plain_url = "#{base_url}/#{key}"
+
+    case Keyword.get(opts, :secret) do
+      nil ->
+        plain_url
+
+      secret ->
+        sign_opts =
+          []
+          |> maybe_put(:expires_in, Keyword.get(opts, :expires_in))
+          |> maybe_put(:disposition, Keyword.get(opts, :disposition))
+          |> maybe_put(:filename, Keyword.get(opts, :filename))
+
+        AshStorage.Token.signed_url(plain_url, secret, key, sign_opts)
+    end
   end
 
   @impl true
@@ -92,4 +111,7 @@ defmodule AshStorage.Service.Disk do
        }
      }}
   end
+
+  defp maybe_put(keyword, _key, nil), do: keyword
+  defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 end

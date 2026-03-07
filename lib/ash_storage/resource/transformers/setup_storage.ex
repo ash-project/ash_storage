@@ -79,21 +79,34 @@ defmodule AshStorage.Resource.Transformers.SetupStorage do
   defp add_url_calculations({:ok, dsl_state}, attachments) do
     resource = Spark.Dsl.Extension.get_persisted(dsl_state, :module)
 
-    attachments
-    |> Enum.filter(&(&1.type == :one))
-    |> Enum.reduce({:ok, dsl_state}, fn attachment_def, {:ok, dsl_state} ->
-      calc_name = :"#{attachment_def.name}_url"
+    Enum.reduce(attachments, {:ok, dsl_state}, fn attachment_def, {:ok, dsl_state} ->
+      calc_name = :"#{attachment_def.name}_urls"
 
-      Ash.Resource.Builder.add_calculation(
-        dsl_state,
-        calc_name,
-        :string,
-        {AshStorage.Resource.Calculations.AttachmentUrl,
-         attachment_name: attachment_def.name, resource: resource},
-        public?: true,
-        filterable?: false,
-        sortable?: false
-      )
+      case attachment_def.type do
+        :one ->
+          Ash.Resource.Builder.add_calculation(
+            dsl_state,
+            :"#{attachment_def.name}_url",
+            :string,
+            {AshStorage.Resource.Calculations.AttachmentUrl,
+             attachment_name: attachment_def.name, resource: resource},
+            public?: true,
+            filterable?: false,
+            sortable?: false
+          )
+
+        :many ->
+          Ash.Resource.Builder.add_calculation(
+            dsl_state,
+            calc_name,
+            {:array, :string},
+            {AshStorage.Resource.Calculations.AttachmentUrls,
+             attachment_name: attachment_def.name, resource: resource},
+            public?: true,
+            filterable?: false,
+            sortable?: false
+          )
+      end
     end)
   end
 

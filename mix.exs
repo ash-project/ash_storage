@@ -84,6 +84,13 @@ defmodule AshStorage.MixProject do
           AshStorage.Service.S3,
           AshStorage.Service.Test
         ],
+        Plugs: [
+          AshStorage.Plug.DiskServe,
+          AshStorage.Plug.Proxy
+        ],
+        Utilities: [
+          AshStorage.Token
+        ],
         Introspection: [
           AshStorage.Resource.Info,
           AshStorage.Resource.AttachmentDefinition
@@ -121,6 +128,9 @@ defmodule AshStorage.MixProject do
       {:spark, "~> 2.2 and >= 2.2.10"},
       {:igniter, "~> 0.5", optional: true},
       {:jason, "~> 1.2"},
+      {:plug, "~> 1.14", optional: true},
+      {:plug_crypto, "~> 1.2 or ~> 2.0", optional: true},
+      {:mime, "~> 2.0", optional: true},
       {:req, "~> 0.5", optional: true},
       {:req_s3, "~> 0.2", optional: true},
       # dev/test dependencies

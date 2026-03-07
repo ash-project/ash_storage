@@ -94,6 +94,7 @@ defmodule AshStorage.Service.S3 do
           resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
         )
         |> maybe_put(:endpoint_url, Keyword.get(opts, :endpoint_url))
+        |> maybe_put(:expires_in, Keyword.get(opts, :expires_in))
 
       ReqS3.presign_url(presign_opts)
     else
