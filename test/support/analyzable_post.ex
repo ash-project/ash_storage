@@ -92,5 +92,13 @@ defmodule AshStorage.Test.AnalyzablePost do
 
   actions do
     defaults [:read, :destroy, create: [:title], update: []]
+
+    create :create_with_doc do
+      accept [:title]
+      argument :document_file, Ash.Type.File, allow_nil?: true
+
+      change {AshStorage.Changes.HandleFileArgument,
+              argument: :document_file, attachment: :document}
+    end
   end
 end

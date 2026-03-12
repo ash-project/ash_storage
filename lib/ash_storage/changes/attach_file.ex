@@ -111,16 +111,29 @@ defmodule AshStorage.Changes.AttachFile do
     {:ok, change(changeset, opts, context)}
   end
 
-  defp extract_file_metadata(%Ash.Type.File{source: source}) do
-    filename = extract_filename(source)
-    content_type = extract_content_type(source)
-    {filename, content_type}
+  defp extract_file_metadata(%Ash.Type.File{} = file) do
+    {file_filename(file), file_content_type(file)}
   end
 
-  defp extract_filename(%{filename: filename}) when is_binary(filename), do: filename
-  defp extract_filename(path) when is_binary(path), do: Path.basename(path)
-  defp extract_filename(_), do: "upload"
+  defp file_filename(%Ash.Type.File{} = file) do
+    if function_exported?(Ash.Type.File, :filename, 1) do
+      case Ash.Type.File.filename(file) do
+        {:ok, name} -> name
+        _ -> "upload"
+      end
+    else
+      "upload"
+    end
+  end
 
-  defp extract_content_type(%{content_type: ct}) when is_binary(ct), do: ct
-  defp extract_content_type(_), do: "application/octet-stream"
+  defp file_content_type(%Ash.Type.File{} = file) do
+    if function_exported?(Ash.Type.File, :content_type, 1) do
+      case Ash.Type.File.content_type(file) do
+        {:ok, type} -> type
+        _ -> "application/octet-stream"
+      end
+    else
+      "application/octet-stream"
+    end
+  end
 end

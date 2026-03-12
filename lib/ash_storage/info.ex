@@ -4,7 +4,9 @@ defmodule AshStorage.Info do
 
   @doc "All attachment definitions on the resource"
   def attachments(resource) do
-    storage(resource)
+    resource
+    |> storage()
+    |> Enum.filter(&match?(%AshStorage.AttachmentDefinition{}, &1))
   end
 
   @doc "All has_one_attached definitions on the resource"

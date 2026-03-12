@@ -13,7 +13,11 @@ defmodule AshStorage.Transformers.SetupStorage do
   def before?(_), do: false
 
   def transform(dsl_state) do
-    attachments = Spark.Dsl.Extension.get_entities(dsl_state, [:storage])
+    all_entities = Spark.Dsl.Extension.get_entities(dsl_state, [:storage])
+
+    attachments =
+      Enum.filter(all_entities, &match?(%AshStorage.AttachmentDefinition{}, &1))
+
     attachment_resource = Spark.Dsl.Extension.get_opt(dsl_state, [:storage], :attachment_resource)
 
     dsl_state
@@ -225,4 +229,5 @@ defmodule AshStorage.Transformers.SetupStorage do
       changes: [change]
     )
   end
+
 end
