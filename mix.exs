@@ -61,6 +61,9 @@ defmodule AshStorage.MixProject do
       end,
       extras: [
         {"README.md", title: "Home"},
+        "documentation/topics/analyzers.md",
+        "documentation/topics/variants.md",
+        "documentation/topics/file-arguments.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -82,6 +85,14 @@ defmodule AshStorage.MixProject do
           AshStorage.BlobResource,
           AshStorage.AttachmentResource
         ],
+        Behaviours: [
+          AshStorage.Analyzer,
+          AshStorage.Variant
+        ],
+        Changes: [
+          AshStorage.Changes.HandleFileArgument,
+          AshStorage.Changes.AttachFile
+        ],
         Services: [
           AshStorage.Service,
           AshStorage.Service.Disk,
@@ -97,7 +108,9 @@ defmodule AshStorage.MixProject do
         ],
         Introspection: [
           AshStorage.Info,
-          AshStorage.AttachmentDefinition
+          AshStorage.AttachmentDefinition,
+          AshStorage.AnalyzerDefinition,
+          AshStorage.VariantDefinition
         ]
       ]
     ]
