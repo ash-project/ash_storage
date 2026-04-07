@@ -4,7 +4,8 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
 
   @before_transformers [
     Ash.Resource.Transformers.DefaultAccept,
-    Ash.Resource.Transformers.SetTypes
+    Ash.Resource.Transformers.SetTypes,
+    Ash.Resource.Transformers.SetRelationshipSource
   ]
 
   def before?(transformer) when transformer in @before_transformers, do: true
