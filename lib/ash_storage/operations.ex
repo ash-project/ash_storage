@@ -72,11 +72,14 @@ defmodule AshStorage.Operations do
          {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
       ctx = build_context(service_opts, resource, attachment_def, opts)
 
-      filename = Keyword.fetch!(opts, :filename)
-      content_type = Keyword.get(opts, :content_type, "application/octet-stream")
-      byte_size = Keyword.get(opts, :byte_size, 0)
-      checksum = Keyword.get(opts, :checksum, "")
-      metadata = Keyword.get(opts, :metadata, %{})
+      {arg_opts, action_opts} =
+        Keyword.split(opts, [:filename, :content_type, :byte_size, :checksum, :metadata])
+
+      filename = Keyword.fetch!(arg_opts, :filename)
+      content_type = Keyword.get(arg_opts, :content_type, "application/octet-stream")
+      byte_size = Keyword.get(arg_opts, :byte_size, 0)
+      checksum = Keyword.get(arg_opts, :checksum, "")
+      metadata = Keyword.get(arg_opts, :metadata, %{})
 
       key = AshStorage.generate_key()
       blob_resource = Info.storage_blob_resource!(resource)
@@ -94,7 +97,7 @@ defmodule AshStorage.Operations do
                  service_opts: persistable_service_opts(service_mod, service_opts),
                  metadata: metadata
                },
-               action: :create
+               Keyword.merge(action_opts, action: :create)
              ),
            {:ok, upload_info} <- service_mod.direct_upload(key, ctx) do
         {:ok, Map.put(upload_info, :blob, blob)}
