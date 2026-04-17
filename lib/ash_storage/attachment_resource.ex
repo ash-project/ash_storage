@@ -70,7 +70,7 @@ defmodule AshStorage.AttachmentResource do
 
   defmodule BelongsToResource do
     @moduledoc "Represents a belongs_to_resource declaration on an attachment resource."
-    defstruct [:name, :resource, :__spark_metadata__]
+    defstruct [:name, :resource, :attribute_type, :__spark_metadata__]
   end
 
   @belongs_to_resource %Spark.Dsl.Entity{
@@ -79,7 +79,8 @@ defmodule AshStorage.AttachmentResource do
     describe:
       "Declares a belongs_to relationship to a parent resource, creating a proper foreign key.",
     examples: [
-      "belongs_to_resource :post, MyApp.Post"
+      "belongs_to_resource :post, MyApp.Post",
+      "belongs_to_resource :post, MyApp.Post, attribute_type: :integer"
     ],
     schema: [
       name: [
@@ -91,6 +92,12 @@ defmodule AshStorage.AttachmentResource do
         type: :module,
         required: true,
         doc: "The parent resource module."
+      ],
+      attribute_type: [
+        type: :any,
+        required: false,
+        doc:
+          "The type of the generated FK attribute. Defaults to `:uuid`. Set to `:integer` if the parent resource uses `integer_primary_key`."
       ]
     ],
     target: BelongsToResource

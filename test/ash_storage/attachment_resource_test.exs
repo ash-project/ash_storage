@@ -2,6 +2,7 @@ defmodule AshStorage.AttachmentResourceTest do
   use ExUnit.Case, async: true
 
   alias AshStorage.Test.Attachment
+  alias AshStorage.Test.IntegerAttachment
   alias AshStorage.Test.MultiAttachment
   alias AshStorage.Test.PolymorphicAttachment
 
@@ -103,6 +104,18 @@ defmodule AshStorage.AttachmentResourceTest do
       assert :record_id in action.accept
       assert :blob_id in action.accept
       assert :name in action.accept
+    end
+  end
+
+  describe "belongs_to_resource with attribute_type" do
+    test "generates FK attribute with the specified type" do
+      attr = Ash.Resource.Info.attribute(IntegerAttachment, :post_id)
+      assert attr.type == Ash.Type.Integer
+    end
+
+    test "defaults to UUID type when attribute_type is not set" do
+      attr = Ash.Resource.Info.attribute(Attachment, :post_id)
+      assert attr.type == Ash.Type.UUID
     end
   end
 
