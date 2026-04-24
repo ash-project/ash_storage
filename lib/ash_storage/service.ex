@@ -32,9 +32,13 @@ defmodule AshStorage.Service do
 
   @doc """
   Upload a file to the storage service.
+
+  May return `:ok` or `{:ok, extra_blob_attrs}`. When a map is returned, its entries
+  are merged into the blob record on creation. This allows wrapping services (e.g.
+  encryption) to store per-file metadata such as encryption keys on the blob.
   """
   @callback upload(key(), iodata() | File.Stream.t(), Context.t()) ::
-              :ok | {:error, term()}
+              :ok | {:ok, map()} | {:error, term()}
 
   @doc """
   Download a file from the storage service.
