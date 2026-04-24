@@ -294,11 +294,10 @@ defmodule AshStorage.Changes.HandleFileArgument do
     checksum = :crypto.hash(:md5, data) |> Base.encode64()
     byte_size = byte_size(data)
 
-    with :ok <- service_mod.upload(key, data, ctx) do
+    with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, data, ctx)) do
       blob_resource = Info.storage_blob_resource!(resource)
 
-      Ash.create(
-        blob_resource,
+      blob_attrs =
         %{
           key: key,
           filename: filename,
@@ -308,11 +307,16 @@ defmodule AshStorage.Changes.HandleFileArgument do
           service_name: service_mod,
           service_opts: persistable_service_opts(service_mod, ctx.service_opts),
           metadata: %{}
-        },
-        action: :create
-      )
+        }
+        |> Map.merge(extra_blob_attrs)
+
+      Ash.create(blob_resource, blob_attrs, action: :create)
     end
   end
+
+  defp normalize_upload(:ok), do: {:ok, %{}}
+  defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
+  defp normalize_upload({:error, _} = error), do: error
 
   defp read_io(%Ash.Type.File{} = file) do
     {:ok, device} = Ash.Type.File.open(file, [:read, :binary])

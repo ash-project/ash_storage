@@ -110,9 +110,8 @@ defmodule AshStorage.VariantGenerator do
 
     blob_resource = Info.storage_blob_resource!(resource)
 
-    with :ok <- service_mod.upload(key, variant_data, ctx) do
-      Ash.create(
-        blob_resource,
+    with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
+      blob_attrs =
         %{
           key: key,
           filename: variant_filename,
@@ -125,11 +124,16 @@ defmodule AshStorage.VariantGenerator do
           variant_of_blob_id: source_blob.id,
           variant_name: to_string(variant_name),
           variant_digest: digest
-        },
-        action: :create_variant
-      )
+        }
+        |> Map.merge(extra_blob_attrs)
+
+      Ash.create(blob_resource, blob_attrs, action: :create_variant)
     end
   end
+
+  defp normalize_upload(:ok), do: {:ok, %{}}
+  defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
+  defp normalize_upload({:error, _} = error), do: error
 
   defp resolve_service(resource, attachment_def) do
     case Info.service_for_attachment(resource, attachment_def) do
