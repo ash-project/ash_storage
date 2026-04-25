@@ -5,6 +5,7 @@ defmodule AshStorage.AttachmentDefinition do
     :type,
     :service,
     :dependent,
+    :sort,
     :__spark_metadata__,
     analyzers: [],
     variants: []
@@ -36,5 +37,15 @@ defmodule AshStorage.AttachmentDefinition do
   end
 
   def has_one_schema, do: @shared_schema
-  def has_many_schema, do: @shared_schema
+
+  def has_many_schema do
+    @shared_schema ++
+      [
+        sort: [
+          type: :any,
+          doc:
+            "A sort statement to be applied when the relationship is loaded. e.g. `sort: created_at: :desc`"
+        ]
+      ]
+  end
 end

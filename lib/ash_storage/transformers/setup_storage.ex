@@ -74,14 +74,33 @@ defmodule AshStorage.Transformers.SetupStorage do
         filter: Ash.Expr.expr(name == ^to_string(attachment_def.name))
       }
 
+      opts =
+        [
+          destination_attribute: destination_attribute,
+          filters: [name_filter],
+          public?: true
+        ]
+
+      opts =
+        if is_nil(parent_rel) do
+          Keyword.put(opts, :validate_destination_attribute?, false)
+        else
+          opts
+        end
+
+      opts =
+        if attachment_def.sort do
+          Keyword.put(opts, :sort, attachment_def.sort)
+        else
+          opts
+        end
+
       Ash.Resource.Builder.add_relationship(
         dsl_state,
         rel_type,
         attachment_def.name,
         attachment_resource,
-        destination_attribute: destination_attribute,
-        filters: [name_filter],
-        public?: true
+        opts
       )
     end)
   end
