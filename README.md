@@ -116,6 +116,7 @@ This automatically adds:
 
 - `has_one :cover_image` / `has_many :documents` relationships to load attachments
 - A `cover_image_url` calculation for each `has_one_attached`
+- A `url` calculation on each attachment record
 
 ## Usage
 
@@ -145,6 +146,11 @@ post.cover_image_url
 post = Ash.load!(post, documents: :blob)
 Enum.map(post.documents, & &1.blob.filename)
 #=> ["report.pdf", "notes.txt"]
+
+# Load URLs via the attachment's url calculation
+post = Ash.load!(post, documents: [:url])
+Enum.map(post.documents, & &1.url)
+#=> ["/storage/a81bf21e2442...", "/storage/f9c3e71d8810..."]
 ```
 
 ### Detaching and purging

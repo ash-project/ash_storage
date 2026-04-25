@@ -74,12 +74,15 @@ defmodule AshStorage.Transformers.SetupStorage do
         filter: Ash.Expr.expr(name == ^to_string(attachment_def.name))
       }
 
+      polymorphic? = is_nil(parent_rel)
+
       Ash.Resource.Builder.add_relationship(
         dsl_state,
         rel_type,
         attachment_def.name,
         attachment_resource,
         destination_attribute: destination_attribute,
+        validate_destination_attribute?: not polymorphic?,
         filters: [name_filter],
         public?: true
       )

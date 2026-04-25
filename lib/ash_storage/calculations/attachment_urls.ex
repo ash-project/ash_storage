@@ -3,11 +3,6 @@ defmodule AshStorage.Calculations.AttachmentUrls do
   use Ash.Resource.Calculation
 
   @impl true
-  def init(opts) do
-    {:ok, opts}
-  end
-
-  @impl true
   def strict_loads?, do: false
 
   @impl true
