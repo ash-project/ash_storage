@@ -20,6 +20,7 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
     dsl_state
     |> add_attributes(belongs_to_resources)
     |> add_relationships(blob_resource, belongs_to_resources)
+    |> add_calculations(belongs_to_resources)
     |> add_actions(belongs_to_resources)
   end
 
@@ -79,6 +80,25 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
   end
 
   defp add_relationships({:error, error}, _, _), do: {:error, error}
+
+  defp add_calculations({:ok, dsl_state}, belongs_to_resources) do
+    parent_resources =
+      Enum.map(belongs_to_resources, fn %{name: name, resource: resource} ->
+        {name, resource}
+      end)
+
+    Ash.Resource.Builder.add_calculation(
+      dsl_state,
+      :url,
+      :string,
+      {AshStorage.Calculations.Url, parent_resources: parent_resources},
+      public?: true,
+      filterable?: false,
+      sortable?: false
+    )
+  end
+
+  defp add_calculations({:error, error}, _), do: {:error, error}
 
   # sobelow_skip ["DOS.BinToAtom"]
   defp add_actions({:ok, dsl_state}, belongs_to_resources) do
