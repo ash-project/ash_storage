@@ -64,6 +64,88 @@ defmodule AshStorage.UrlTest do
     end
   end
 
+  describe "attachment URL calculation" do
+    test "returns URL for has_one attachment" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "data",
+          filename: "photo.jpg",
+          content_type: "image/jpeg"
+        )
+
+      post = Ash.load!(post, cover_image: [:url])
+      assert post.cover_image.url == "http://test.local/storage/#{blob.key}"
+    end
+
+    test "returns URLs for has_many attachments" do
+      post = create_post!()
+
+      {:ok, %{blob: blob1}} =
+        AshStorage.Operations.attach(post, :documents, "doc1",
+          filename: "a.txt",
+          content_type: "text/plain"
+        )
+
+      {:ok, %{blob: blob2}} =
+        AshStorage.Operations.attach(post, :documents, "doc2",
+          filename: "b.txt",
+          content_type: "text/plain"
+        )
+
+      post = Ash.load!(post, documents: [:url])
+
+      urls =
+        post.documents
+        |> Enum.map(& &1.url)
+        |> Enum.sort()
+
+      expected =
+        [blob1.key, blob2.key]
+        |> Enum.map(&"http://test.local/storage/#{&1}")
+        |> Enum.sort()
+
+      assert urls == expected
+    end
+  end
+
+  describe "attachment URL calculation with variants" do
+    defp create_variant_post! do
+      AshStorage.Test.VariantPost
+      |> Ash.Changeset.for_create(:create, %{title: "test"})
+      |> Ash.create!()
+    end
+
+    test "returns source blob URL when variants exist" do
+      post = create_variant_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :document, "hello",
+          filename: "test.txt",
+          content_type: "text/plain"
+        )
+
+      post = Ash.load!(post, document: [:url])
+      assert post.document.url == "http://test.local/storage/#{blob.key}"
+    end
+
+    test "source blob URL is distinct from variant URLs" do
+      post = create_variant_post!()
+
+      {:ok, _} =
+        AshStorage.Operations.attach(post, :document, "hello",
+          filename: "test.txt",
+          content_type: "text/plain"
+        )
+
+      post = Ash.load!(post, [:document_eager_uppercase_url, document: [:url]])
+
+      # Attachment url is the source blob URL
+      # Variant url is a different blob's URL
+      assert post.document.url != post.document_eager_uppercase_url
+    end
+  end
+
   describe "Disk signed URLs" do
     test "generates plain URL without secret" do
       ctx =
