@@ -195,7 +195,9 @@ defmodule AshStorage.MixProject do
       docs: [
         "docs",
         "spark.replace_doc_links"
-      ]
+      ],
+      "spark.formatter":
+        "spark.formatter --extensions AshStorage,AshStorage.BlobResource,AshStorage.AttachmentResource"
     ]
   end
 end
