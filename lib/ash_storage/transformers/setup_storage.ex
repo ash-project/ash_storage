@@ -77,16 +77,10 @@ defmodule AshStorage.Transformers.SetupStorage do
       opts =
         [
           destination_attribute: destination_attribute,
+          validate_destination_attribute?: not is_nil(parent_rel),
           filters: [name_filter],
           public?: true
         ]
-
-      opts =
-        if is_nil(parent_rel) do
-          Keyword.put(opts, :validate_destination_attribute?, false)
-        else
-          opts
-        end
 
       opts =
         if attachment_def.sort do
