@@ -197,6 +197,7 @@ if Code.ensure_loaded?(ReqS3) do
     defp prefixed_key(key, %AshStorage.Service.Context{} = ctx) do
       case Keyword.get(ctx.service_opts, :prefix) do
         nil -> key
+        "" -> key
         prefix -> "#{prefix}#{key}"
       end
     end

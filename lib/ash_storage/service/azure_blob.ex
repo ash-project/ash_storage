@@ -203,14 +203,54 @@ if Code.ensure_loaded?(Req) do
 
       case resolve_sas_token(ctx.service_opts) do
         {:ok, token} ->
-          {:ok, append_query(base_url, token)}
+          with :ok <- check_sas_permissions(token, Keyword.get(opts, :permissions)) do
+            {:ok, append_query(base_url, token)}
+          end
 
         :error ->
-          generate_sas_query(key, ctx, opts)
-          |> case do
+          case generate_sas_query(key, ctx, opts) do
             {:ok, query} -> {:ok, append_query(base_url, query)}
             {:error, reason} -> {:error, reason}
           end
+      end
+    end
+
+    # A configured SAS token is reused for every operation, so it must already
+    # grant the permissions each operation needs. Parse the `sp` field and fail
+    # fast when a required permission is missing. When the token has no `sp`
+    # parameter, fall through and let Azure return its own error.
+    defp check_sas_permissions(_token, nil), do: :ok
+    defp check_sas_permissions(_token, ""), do: :ok
+
+    defp check_sas_permissions(token, required) do
+      case sas_granted_permissions(token) do
+        {:ok, granted} ->
+          missing =
+            required
+            |> String.graphemes()
+            |> Enum.uniq()
+            |> Enum.reject(&String.contains?(granted, &1))
+
+          case missing do
+            [] ->
+              :ok
+
+            _ ->
+              {:error,
+               {:sas_missing_permissions,
+                required: required, granted: granted, missing: Enum.join(missing)}}
+          end
+
+        :error ->
+          :ok
+      end
+    end
+
+    defp sas_granted_permissions(token) do
+      case token |> URI.decode_query() |> Map.get("sp") do
+        nil -> :error
+        "" -> :error
+        sp -> {:ok, sp}
       end
     end
 

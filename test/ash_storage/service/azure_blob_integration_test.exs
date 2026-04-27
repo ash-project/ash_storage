@@ -194,13 +194,13 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
 
   describe "configured SAS tokens" do
     test "work for all operations when the token has the required permissions" do
+      key = unique_key()
+
       sas_ctx =
         @service_opts
         |> Keyword.put(:account_key_env, "MISSING_AZURE_STORAGE_ACCOUNT_KEY")
-        |> Keyword.put(:sas_token, account_sas_token())
+        |> Keyword.put(:sas_token, blob_sas_token(key, "rcwd"))
         |> Context.new()
-
-      key = unique_key()
 
       assert :ok = AzureBlob.upload(key, "sas token content", sas_ctx)
       assert {:ok, true} = AzureBlob.exists?(key, sas_ctx)
@@ -287,6 +287,63 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       Application.delete_env(:ash_storage, AshStorage.Test.ConfigurablePost)
     end
 
+    test "literal :account_key is not persisted on blob records, breaking async flows" do
+      # Regression test for the documented gotcha: literal :account_key works for
+      # the immediate request path because the live context has it, but the credential
+      # is intentionally excluded from service_opts_fields. Async/blob-driven flows
+      # rebuild the context from blob.parsed_service_opts and must therefore fall
+      # back to env-backed credentials. Pointing :account_key_env at a deliberately
+      # missing env var proves the literal credential never reaches that code path.
+      missing_env = "MISSING_AZURE_KEY_FOR_TEST_#{System.unique_integer([:positive])}"
+      System.delete_env(missing_env)
+
+      literal_opts =
+        @service_opts
+        |> Keyword.delete(:account_key_env)
+        |> Keyword.put(:account_key, @account_key)
+        |> Keyword.put(:account_key_env, missing_env)
+
+      Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
+        storage: [
+          service: {AshStorage.Service.AzureBlob, literal_opts}
+        ]
+      )
+
+      post =
+        AshStorage.Test.ConfigurablePost
+        |> Ash.Changeset.for_create(:create, %{title: "literal cred post"})
+        |> Ash.create!()
+
+      # Attach succeeds — the live changeset context carries the literal account key.
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :avatar, "literal cred content",
+          filename: "literal.txt",
+          content_type: "text/plain"
+        )
+
+      assert {:ok, "literal cred content"} = AzureBlob.download(blob.key, ctx())
+
+      # The persisted map only contains fields declared in service_opts_fields/0.
+      stored_opts = blob.service_opts || %{}
+      refute Map.has_key?(stored_opts, :account_key)
+      refute Map.has_key?(stored_opts, "account_key")
+
+      # parsed_service_opts is what async/blob-driven flows rebuild a context from.
+      blob = Ash.load!(blob, :parsed_service_opts)
+      parsed = blob.parsed_service_opts || []
+      refute Keyword.has_key?(parsed, :account_key)
+
+      # Calling :purge_blob directly drives the same code path AshOban would.
+      # Without an env-backed credential it cannot resolve the account key.
+      assert {:error, error} = Ash.destroy(blob, action: :purge_blob, return_destroyed?: true)
+      assert Exception.message(error) =~ "missing_credentials"
+
+      # The file is still in storage — clean it up via the env-backed test context.
+      assert :ok = AzureBlob.delete(blob.key, ctx())
+    after
+      Application.delete_env(:ash_storage, AshStorage.Test.ConfigurablePost)
+    end
+
     test "direct upload flow via Azure Blob Storage" do
       Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
         storage: [
@@ -361,9 +418,9 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
   defp create_container(0), do: {:error, :timeout}
 
   defp create_container(attempts) do
-    url = "#{@endpoint_url}/#{@container}?restype=container&#{account_sas_token()}"
+    url = "#{@endpoint_url}/#{@container}?restype=container"
 
-    case Req.put(url, headers: %{"x-ms-version" => @service_version}, body: "") do
+    case Req.put(url, headers: shared_key_headers(), body: "") do
       {:ok, %{status: status}} when status in [201, 202, 409] ->
         :ok
 
@@ -373,24 +430,67 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
     end
   end
 
-  defp account_sas_token do
-    permissions = "rwdlacup"
-    services = "b"
-    resource_types = "sco"
-    protocol = "https,http"
-    expiry_time = DateTime.utc_now() |> DateTime.add(3600, :second) |> format_time()
+  defp shared_key_headers do
+    date = Calendar.strftime(DateTime.utc_now(), "%a, %d %b %Y %H:%M:%S GMT")
+
+    canonicalized_headers =
+      "x-ms-date:#{date}\nx-ms-version:#{@service_version}\n"
+
+    # Azurite uses path-style URLs, so the account appears both as the signing
+    # account and as the first path segment.
+    canonicalized_resource = "/#{@account}/#{@account}/#{@container}\nrestype:container"
 
     string_to_sign =
       [
-        @account,
+        "PUT",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        canonicalized_headers <> canonicalized_resource
+      ]
+      |> Enum.join("\n")
+
+    signature =
+      :crypto.mac(:hmac, :sha256, Base.decode64!(@account_key), string_to_sign)
+      |> Base.encode64()
+
+    %{
+      "authorization" => "SharedKey #{@account}:#{signature}",
+      "x-ms-date" => date,
+      "x-ms-version" => @service_version
+    }
+  end
+
+  defp blob_sas_token(key, permissions) do
+    protocol = "https,http"
+    expiry_time = DateTime.utc_now() |> DateTime.add(3600, :second) |> format_time()
+    canonicalized_resource = "/blob/#{@account}/#{@container}/#{key}"
+
+    string_to_sign =
+      [
         permissions,
-        services,
-        resource_types,
         "",
         expiry_time,
+        canonicalized_resource,
+        "",
         "",
         protocol,
         @service_version,
+        "b",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
         ""
       ]
       |> Enum.join("\n")
@@ -401,11 +501,10 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
 
     [
       {"sv", @service_version},
-      {"ss", services},
-      {"srt", resource_types},
-      {"sp", permissions},
-      {"se", expiry_time},
       {"spr", protocol},
+      {"se", expiry_time},
+      {"sr", "b"},
+      {"sp", permissions},
       {"sig", signature}
     ]
     |> URI.encode_query()
