@@ -97,6 +97,7 @@ defmodule AshStorage.MixProject do
         ],
         Services: [
           AshStorage.Service,
+          AshStorage.Service.AzureBlob,
           AshStorage.Service.Disk,
           AshStorage.Service.S3,
           AshStorage.Service.Test

@@ -275,8 +275,20 @@ AshStorage ships with:
 - `AshStorage.Service.Disk` — Local filesystem storage
 - `AshStorage.Service.Test` — In-memory storage for tests
 - `AshStorage.Service.S3` — S3-compatible storage (requires [`req_s3`](https://hex.pm/packages/req_s3))
+- `AshStorage.Service.AzureBlob` — Azure Blob Storage (requires [`req`](https://hex.pm/packages/req))
 
 Implement the `AshStorage.Service` behaviour to add custom backends.
+
+### Live service integration tests
+
+External service integration tests are excluded from normal `mix test` runs:
+
+```bash
+mix test --include s3_integration test/ash_storage/service/s3_integration_test.exs
+mix test --include azure_integration test/ash_storage/service/azure_blob_integration_test.exs
+```
+
+The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docker. Disk and Test service coverage run as part of the normal test suite.
 
 ## Roadmap
 
@@ -288,10 +300,16 @@ Implement the `AshStorage.Service` behaviour to add custom backends.
 - **Mirroring** — Mirror service that replicates uploads across multiple backends for redundancy
 - **Orphan cleanup** — Periodic cleanup of blobs without files or files without blobs. With AshOban: scheduled job. Without: manual invocation via `AshStorage.Operations.cleanup_orphans/1`.
 
+### Azure Blob Storage follow-ups
+
+- **Managed Identity / Azure AD** — Add OAuth-based requests and user delegation SAS generation for environments that disable shared key access.
+- **Block uploads** — Support `Put Block` / `Put Block List` for very large files and resumable direct uploads.
+- **Checksum verification** — Wire Azure `Content-MD5` / `x-ms-blob-content-md5` support into the broader checksum roadmap.
+- **CI integration** — Run the Azurite-backed `:azure_integration` suite in CI when Docker is available.
+
 ### Future services
 
 - **GCS** — Google Cloud Storage backend
-- **Azure** — Azure Blob Storage backend
 
 ### Library options under consideration
 
