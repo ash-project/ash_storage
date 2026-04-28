@@ -23,12 +23,31 @@ defmodule AshStorage.Service.AzureBlobTest do
                "https://myaccount.blob.core.windows.net/uploads/tenant%20one/folder/my%20file.txt"
     end
 
+    test "treats an empty prefix as no prefix" do
+      ctx = Context.new(account: @account, container: @container, prefix: "")
+
+      assert AzureBlob.url("folder/blob.txt", ctx) ==
+               "https://myaccount.blob.core.windows.net/uploads/folder/blob.txt"
+    end
+
     test "uses custom endpoint URLs" do
       ctx =
         Context.new(
           account: "devstoreaccount1",
           container: @container,
           endpoint_url: "http://127.0.0.1:10000/devstoreaccount1"
+        )
+
+      assert AzureBlob.url("folder/blob.txt", ctx) ==
+               "http://127.0.0.1:10000/devstoreaccount1/uploads/folder/blob.txt"
+    end
+
+    test "trims trailing slashes from custom endpoint URLs" do
+      ctx =
+        Context.new(
+          account: "devstoreaccount1",
+          container: @container,
+          endpoint_url: "http://127.0.0.1:10000/devstoreaccount1/"
         )
 
       assert AzureBlob.url("folder/blob.txt", ctx) ==
@@ -116,6 +135,149 @@ defmodule AshStorage.Service.AzureBlobTest do
                    fn ->
                      AzureBlob.url("blob.txt", ctx)
                    end
+    end
+
+    test "raises a helpful error when the configured account key is not valid base64" do
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key: "not-base-64!!!",
+          presigned: true
+        )
+
+      assert_raise ArgumentError,
+                   ~r/could not generate Azure Blob SAS URL: :invalid_account_key/,
+                   fn ->
+                     AzureBlob.url("blob.txt", ctx)
+                   end
+    end
+
+    test "respects custom :service_version in SAS signatures" do
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key: @account_key,
+          presigned: true,
+          service_version: "2021-12-02"
+        )
+
+      params =
+        AzureBlob.url("blob.txt", ctx)
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert params["sv"] == "2021-12-02"
+    end
+
+    test "respects an explicit :signed_protocol override" do
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key: @account_key,
+          presigned: true,
+          signed_protocol: "https,http"
+        )
+
+      params =
+        AzureBlob.url("blob.txt", ctx)
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert params["spr"] == "https,http"
+    end
+  end
+
+  describe "credential resolution" do
+    @env_account_key "AZURE_TEST_ACCOUNT_KEY_#{System.unique_integer([:positive])}"
+    @env_sas_token "AZURE_TEST_SAS_TOKEN_#{System.unique_integer([:positive])}"
+
+    setup do
+      System.delete_env(@env_account_key)
+      System.delete_env(@env_sas_token)
+
+      on_exit(fn ->
+        System.delete_env(@env_account_key)
+        System.delete_env(@env_sas_token)
+      end)
+
+      :ok
+    end
+
+    test "reads :account_key from the configured env var" do
+      System.put_env(@env_account_key, @account_key)
+
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key_env: @env_account_key,
+          presigned: true
+        )
+
+      url = AzureBlob.url("blob.txt", ctx)
+      params = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+      assert params["sig"] ==
+               expected_signature("r", params["se"], "/blob/myaccount/uploads/blob.txt", "https")
+    end
+
+    test "treats an empty env var account key as missing" do
+      System.put_env(@env_account_key, "")
+
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key_env: @env_account_key,
+          presigned: true
+        )
+
+      assert_raise ArgumentError,
+                   ~r/could not generate Azure Blob SAS URL: :missing_credentials/,
+                   fn ->
+                     AzureBlob.url("blob.txt", ctx)
+                   end
+    end
+
+    test "reads :sas_token from the configured env var" do
+      System.put_env(@env_sas_token, "?sv=2020-12-06&sp=r&sig=envtoken")
+
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          sas_token_env: @env_sas_token,
+          presigned: true
+        )
+
+      assert AzureBlob.url("blob.txt", ctx) =~ "sig=envtoken"
+    end
+
+    test "ignores empty env var SAS tokens and falls through to account key" do
+      System.put_env(@env_sas_token, "")
+
+      ctx =
+        Context.new(
+          account: @account,
+          container: @container,
+          account_key: @account_key,
+          sas_token_env: @env_sas_token,
+          presigned: true
+        )
+
+      params =
+        AzureBlob.url("blob.txt", ctx)
+        |> URI.parse()
+        |> Map.fetch!(:query)
+        |> URI.decode_query()
+
+      assert params["sig"] ==
+               expected_signature("r", params["se"], "/blob/myaccount/uploads/blob.txt", "https")
     end
   end
 
@@ -295,6 +457,52 @@ defmodule AshStorage.Service.AzureBlobTest do
       assert {:ok, %{status: 201}} = Req.put(url, body: "image data", headers: headers)
       assert {:ok, "image data"} = AzureBlob.download("direct/photo.png", ctx)
     end
+
+    test "sends the configured x-ms-version header on every request", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx = http_context(endpoint_url, service_version: "2021-12-02")
+      key = "version/blob.txt"
+
+      :ok = AzureBlob.upload(key, "data", ctx)
+      {:ok, _} = AzureBlob.download(key, ctx)
+      {:ok, true} = AzureBlob.exists?(key, ctx)
+      :ok = AzureBlob.delete(key, ctx)
+
+      for request <- recorded_requests(server_state) do
+        assert request.headers["x-ms-version"] == "2021-12-02"
+        assert request.query["sv"] == "2021-12-02"
+      end
+    end
+
+    test "surfaces unexpected upload statuses as errors", %{endpoint_url: endpoint_url} do
+      ctx = http_context(endpoint_url)
+      key = "force-status-400/explode.txt"
+
+      assert {:error, {400, _body}} = AzureBlob.upload(key, "boom", ctx)
+    end
+
+    test "surfaces unexpected download statuses as errors", %{endpoint_url: endpoint_url} do
+      ctx = http_context(endpoint_url)
+      key = "force-status-400/explode.txt"
+
+      assert {:error, {400, _body}} = AzureBlob.download(key, ctx)
+    end
+
+    test "surfaces unexpected delete statuses as errors", %{endpoint_url: endpoint_url} do
+      ctx = http_context(endpoint_url)
+      key = "force-status-400/explode.txt"
+
+      assert {:error, {400, _body}} = AzureBlob.delete(key, ctx)
+    end
+
+    test "surfaces unexpected exists? statuses as errors", %{endpoint_url: endpoint_url} do
+      ctx = http_context(endpoint_url)
+      key = "force-status-400/explode.txt"
+
+      assert {:error, {:unexpected_status, 400}} = AzureBlob.exists?(key, ctx)
+    end
   end
 
   describe "service_opts_fields/0" do
@@ -430,10 +638,21 @@ defmodule AshStorage.Service.AzureBlobTest do
       {:ok, key} ->
         request = Map.put(request, :key, key)
         record_request(server_state, request)
-        handle_blob_request(request, server_state)
+
+        case forced_status(key) do
+          {:ok, status} -> {status, ""}
+          :none -> handle_blob_request(request, server_state)
+        end
 
       :error ->
         {404, ""}
+    end
+  end
+
+  defp forced_status(key) do
+    case Regex.run(~r/^force-status-(\d{3})\//, key) do
+      [_, status] -> {:ok, String.to_integer(status)}
+      _ -> :none
     end
   end
 

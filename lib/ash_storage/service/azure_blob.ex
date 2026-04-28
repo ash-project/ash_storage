@@ -66,8 +66,22 @@ if Code.ensure_loaded?(Req) do
     application origin, the `PUT`/`OPTIONS` methods, and the request headers your
     client sends, including `x-ms-blob-type` and `content-type`.
 
-    This service uses Azure's single `Put Blob` operation for uploads. Very large
-    multi-block uploads (`Put Block`/`Put Block List`) are not implemented yet.
+    ## Limits
+
+    Uploads use a single `Put Blob` request, which Azure caps at 5,000 MiB per
+    request and recommends keeping under 256 MiB. Block-based uploads
+    (`Put Block` / `Put Block List`) for larger or resumable uploads are tracked
+    on the roadmap.
+
+    ## Per-call Content-Type
+
+    `:content_type` listed below is read from `service_opts` (i.e. set on the
+    storage configuration), not from per-call attach or `prepare_direct_upload/3`
+    options. To pin a specific Content-Type to direct uploads from a single
+    attachment, configure the service for that attachment with `:content_type`
+    set. Browsers performing direct uploads typically set their own
+    `Content-Type` request header, so the SAS-signed override is only needed
+    when you want it pinned server-side.
     """
 
     @behaviour AshStorage.Service
@@ -86,6 +100,8 @@ if Code.ensure_loaded?(Req) do
         account_key_env: [type: :string],
         sas_token_env: [type: :string],
         presigned: [type: :boolean],
+        expires_in: [type: :integer],
+        direct_upload_expires_in: [type: :integer],
         service_version: [type: :string],
         signed_protocol: [type: :string]
       ]
@@ -95,12 +111,17 @@ if Code.ensure_loaded?(Req) do
     def upload(key, data, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
+      # Azure's `Put Blob` rejects Transfer-Encoding: chunked, which Req+Finch
+      # emit for any non-iodata body (including File.Stream). Materialise the
+      # stream so the request goes out with a fixed Content-Length.
+      data = materialize_body(data)
+
       with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "cw", expires_in: 900) do
         headers =
           ctx
           |> base_headers()
           |> Map.put("x-ms-blob-type", "BlockBlob")
-          |> maybe_put_header("content-type", Keyword.get(ctx.service_opts, :content_type))
+          |> maybe_put("content-type", Keyword.get(ctx.service_opts, :content_type))
 
         case Req.put(url, body: data, headers: headers) do
           {:ok, %{status: status}} when status in 200..299 -> :ok
@@ -190,13 +211,16 @@ if Code.ensure_loaded?(Req) do
              ) do
         headers =
           %{"x-ms-blob-type" => "BlockBlob"}
-          |> maybe_put_header("content-type", Keyword.get(ctx.service_opts, :content_type))
+          |> maybe_put("content-type", Keyword.get(ctx.service_opts, :content_type))
 
         {:ok, %{url: url, method: :put, headers: headers}}
       end
     end
 
     # -- Private helpers --
+
+    defp materialize_body(%File.Stream{path: path}), do: File.read!(path)
+    defp materialize_body(data) when is_binary(data) or is_list(data), do: data
 
     defp signed_blob_url(key, %AshStorage.Service.Context{} = ctx, opts) do
       base_url = blob_url(key, ctx)
@@ -295,15 +319,15 @@ if Code.ensure_loaded?(Req) do
           |> Base.encode64()
 
         query =
-          [
-            {"sv", version},
-            {"spr", protocol},
-            {"se", expiry_time},
-            {"sr", resource},
-            {"sp", permissions},
-            {"sig", signature}
-          ]
-          |> maybe_put_query("st", start_time)
+          %{
+            "sv" => version,
+            "spr" => protocol,
+            "se" => expiry_time,
+            "sr" => resource,
+            "sp" => permissions,
+            "sig" => signature
+          }
+          |> maybe_put("st", start_time)
           |> put_response_header_params(response_headers)
           |> URI.encode_query()
 
@@ -439,11 +463,11 @@ if Code.ensure_loaded?(Req) do
 
     defp response_headers(opts) do
       %{}
-      |> maybe_put_response_header("rscc", Keyword.get(opts, :cache_control))
-      |> maybe_put_response_header("rscd", content_disposition(opts))
-      |> maybe_put_response_header("rsce", Keyword.get(opts, :content_encoding))
-      |> maybe_put_response_header("rscl", Keyword.get(opts, :content_language))
-      |> maybe_put_response_header("rsct", Keyword.get(opts, :content_type))
+      |> maybe_put("rscc", Keyword.get(opts, :cache_control))
+      |> maybe_put("rscd", content_disposition(opts))
+      |> maybe_put("rsce", Keyword.get(opts, :content_encoding))
+      |> maybe_put("rscl", Keyword.get(opts, :content_language))
+      |> maybe_put("rsct", Keyword.get(opts, :content_type))
     end
 
     defp content_disposition(opts) do
@@ -463,21 +487,13 @@ if Code.ensure_loaded?(Req) do
 
     defp put_response_header_params(query, response_headers) do
       Enum.reduce(response_headers, query, fn {name, value}, acc ->
-        maybe_put_query(acc, name, value)
+        maybe_put(acc, name, value)
       end)
     end
 
-    defp maybe_put_query(query, _key, nil), do: query
-    defp maybe_put_query(query, _key, ""), do: query
-    defp maybe_put_query(query, key, value), do: query ++ [{key, value}]
-
-    defp maybe_put_response_header(headers, _key, nil), do: headers
-    defp maybe_put_response_header(headers, _key, ""), do: headers
-    defp maybe_put_response_header(headers, key, value), do: Map.put(headers, key, value)
-
-    defp maybe_put_header(headers, _key, nil), do: headers
-    defp maybe_put_header(headers, _key, ""), do: headers
-    defp maybe_put_header(headers, key, value), do: Map.put(headers, key, value)
+    defp maybe_put(collection, _key, nil), do: collection
+    defp maybe_put(collection, _key, ""), do: collection
+    defp maybe_put(collection, key, value), do: Map.put(collection, key, value)
 
     defp encode_blob_path(key) do
       key

@@ -117,6 +117,27 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert {:ok, ^data} = AzureBlob.download(key, ctx())
     end
 
+    test "round-trips a File.Stream" do
+      key = unique_key()
+      data = :crypto.strong_rand_bytes(64 * 1024)
+
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "ash_storage_azure_filestream_#{System.unique_integer([:positive])}.bin"
+        )
+
+      File.write!(path, data)
+
+      try do
+        stream = File.stream!(path, 8192)
+        assert :ok = AzureBlob.upload(key, stream, ctx())
+        assert {:ok, ^data} = AzureBlob.download(key, ctx())
+      after
+        File.rm(path)
+      end
+    end
+
     test "download returns not_found for missing key" do
       assert {:error, :not_found} = AzureBlob.download(unique_key(), ctx())
     end
@@ -177,6 +198,47 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert params["se"]
       assert {:ok, %{status: 200, body: "expiry test"}} = Req.get(url)
     end
+
+    test "expires_in survives a context rebuilt from blob.parsed_service_opts" do
+      # Async/blob-driven flows (custom URL calcs operating on a stored blob,
+      # background workers, etc.) reconstruct the service context from
+      # blob.parsed_service_opts. A documented service option that silently
+      # falls back to defaults in that path is a footgun: the user configures
+      # `expires_in: 120` in the DSL and gets 3600s SAS URLs in async code.
+      Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
+        storage: [
+          service:
+            {AshStorage.Service.AzureBlob,
+             @service_opts |> Keyword.put(:presigned, true) |> Keyword.put(:expires_in, 120)}
+        ]
+      )
+
+      AshStorage.Service.Test.reset!()
+
+      post =
+        AshStorage.Test.ConfigurablePost
+        |> Ash.Changeset.for_create(:create, %{title: "expires_in persistence"})
+        |> Ash.create!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :avatar, "expires content",
+          filename: "expires.txt",
+          content_type: "text/plain"
+        )
+
+      blob = Ash.load!(blob, :parsed_service_opts)
+      ctx = Context.new(blob.parsed_service_opts || [])
+      url = AzureBlob.url(blob.key, ctx)
+
+      params = url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+      {:ok, expires_at, _} = DateTime.from_iso8601(params["se"])
+      diff = DateTime.diff(expires_at, DateTime.utc_now(), :second)
+
+      assert diff in 60..240,
+             "expected SAS expiry ~120s away, got #{diff}s — :expires_in did not survive parsed_service_opts"
+    after
+      Application.delete_env(:ash_storage, AshStorage.Test.ConfigurablePost)
+    end
   end
 
   describe "prefix option" do
@@ -207,6 +269,76 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert {:ok, "sas token content"} = AzureBlob.download(key, sas_ctx)
       assert :ok = AzureBlob.delete(key, sas_ctx)
       assert {:ok, false} = AzureBlob.exists?(key, sas_ctx)
+    end
+  end
+
+  describe "Proxy plug with Azure Blob" do
+    test "serves file through proxy" do
+      key = unique_key()
+      AzureBlob.upload(key, "proxy azure content", ctx())
+
+      plug_opts =
+        AshStorage.Plug.Proxy.init(service: {AshStorage.Service.AzureBlob, @service_opts})
+
+      conn =
+        Plug.Test.conn(:get, "/#{key}")
+        |> AshStorage.Plug.Proxy.call(plug_opts)
+
+      assert conn.status == 200
+      assert conn.resp_body == "proxy azure content"
+    end
+
+    test "returns 404 for missing key through proxy" do
+      plug_opts =
+        AshStorage.Plug.Proxy.init(service: {AshStorage.Service.AzureBlob, @service_opts})
+
+      conn =
+        Plug.Test.conn(:get, "/#{unique_key()}")
+        |> AshStorage.Plug.Proxy.call(plug_opts)
+
+      assert conn.status == 404
+    end
+
+    test "signed proxy rejects unsigned requests" do
+      key = unique_key()
+      AzureBlob.upload(key, "secret data", ctx())
+
+      plug_opts =
+        AshStorage.Plug.Proxy.init(
+          service: {AshStorage.Service.AzureBlob, @service_opts},
+          secret: "proxy-test-secret"
+        )
+
+      conn =
+        Plug.Test.conn(:get, "/#{key}")
+        |> AshStorage.Plug.Proxy.call(plug_opts)
+
+      assert conn.status == 403
+    end
+
+    test "signed proxy serves with valid token" do
+      key = unique_key()
+      AzureBlob.upload(key, "signed proxy data", ctx())
+      secret = "proxy-test-secret"
+      expires = System.system_time(:second) + 3600
+      token = AshStorage.Token.sign(secret, key, expires)
+
+      plug_opts =
+        AshStorage.Plug.Proxy.init(
+          service: {AshStorage.Service.AzureBlob, @service_opts},
+          secret: secret
+        )
+
+      conn =
+        Plug.Test.conn(
+          :get,
+          "/#{key}?token=#{URI.encode_www_form(token)}&expires=#{expires}"
+        )
+        |> Plug.Conn.fetch_query_params()
+        |> AshStorage.Plug.Proxy.call(plug_opts)
+
+      assert conn.status == 200
+      assert conn.resp_body == "signed proxy data"
     end
   end
 
