@@ -108,6 +108,8 @@ service {AshStorage.Service.S3,
   direct_upload_method: :post}
 ```
 
+The JS example below is for presigned PUT. For presigned POST, build a `FormData` with the returned `:fields` (each as a form field), append the file last, and `POST` it as `multipart/form-data` — do not set `Content-Type` manually or send the raw file as the body.
+
 ## Step 2: Client uploads and attaches
 
 Send the presigned URL and blob ID to your client. The client uploads directly to storage, then includes the blob ID in a normal create or update:

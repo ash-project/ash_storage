@@ -125,6 +125,11 @@ if Code.ensure_loaded?(ReqS3) do
 
     For `:put`, returns `%{url: presigned_url, method: :put}`.
     For `:post`, returns `%{url: form_url, method: :post, fields: [...]}`.
+
+    Note: this currently returns no `:headers`. If you add request headers that
+    SigV4 signs (any `x-amz-*` header, e.g. SSE or `x-amz-meta-*`), they must be
+    included at presign time — clients sending them post-hoc will get a signature
+    mismatch.
     """
     @impl true
     def direct_upload(key, %AshStorage.Service.Context{} = ctx) do
