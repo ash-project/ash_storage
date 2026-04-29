@@ -1,6 +1,6 @@
 # Direct Uploads
 
-Direct uploads let clients upload files straight to your storage backend (S3, MinIO, etc.) without proxying through your server. This is the recommended approach for large files — it keeps your application server out of the data path.
+Direct uploads let clients upload files straight to your storage backend (S3, MinIO, Azure Blob Storage, etc.) without proxying through your server. This is the recommended approach for large files — it keeps your application server out of the data path.
 
 The flow has two steps:
 
@@ -9,7 +9,7 @@ The flow has two steps:
 
 ## Setup
 
-Direct uploads require a storage service that supports presigned URLs. `AshStorage.Service.S3` supports this out of the box:
+Direct uploads require a storage service that supports presigned URLs. `AshStorage.Service.S3` and `AshStorage.Service.AzureBlob` support this out of the box:
 
 ```elixir
 storage do
@@ -24,6 +24,32 @@ storage do
   has_one_attached :cover_image
 end
 ```
+
+For Azure Blob Storage:
+
+```elixir
+storage do
+  service {AshStorage.Service.AzureBlob,
+    account: "myaccount",
+    container: "uploads",
+    account_key_env: "AZURE_STORAGE_ACCOUNT_KEY",
+    presigned: true}
+
+  blob_resource MyApp.StorageBlob
+  attachment_resource MyApp.StorageAttachment
+
+  has_one_attached :cover_image
+end
+```
+
+Azure browser uploads require CORS on the storage account and the `x-ms-blob-type: BlockBlob` request header. `AshStorage.Service.AzureBlob.direct_upload/2` includes that header in the returned upload info.
+
+Azure-specific checklist:
+
+- Create the blob container before uploads begin; the service creates blobs, not containers.
+- Configure Blob service CORS for your browser origin, `PUT`/`OPTIONS`, and the request headers your client sends, including `x-ms-blob-type` and `content-type`.
+- Prefer `:account_key_env` or `:sas_token_env` over literal secrets. Literal `:account_key` and `:sas_token` values work for immediate service requests but are not persisted on blob records. Use env-backed credentials for attachment flows that later operate from stored blobs, including purge, analysis, and variants.
+- If you provide a static SAS token via `:sas_token`/`:sas_token_env`, it is reused for every Azure operation. Use a container/account SAS with the needed permissions: read (`r`) for URLs/downloads/existence checks, create/write (`c`, `w`) for uploads/direct uploads, and delete (`d`) for purges.
 
 Add the `AshStorage.Changes.AttachBlob` change to your create or update actions:
 
@@ -68,6 +94,7 @@ The returned map contains:
 - `:blob` — the created blob record (not yet attached to anything)
 - `:url` — the presigned URL to upload to
 - `:method` — `:put` or `:post` depending on configuration
+- `:headers` — headers to include with the direct upload, when required by the service
 
 For S3 presigned POST (multipart form uploads), you also get `:fields` — a list of form fields to include.
 
@@ -81,16 +108,21 @@ service {AshStorage.Service.S3,
   direct_upload_method: :post}
 ```
 
+The JS example below is for presigned PUT. For presigned POST, build a `FormData` with the returned `:fields` (each as a form field), append the file last, and `POST` it as `multipart/form-data` — do not set `Content-Type` manually or send the raw file as the body.
+
 ## Step 2: Client uploads and attaches
 
 Send the presigned URL and blob ID to your client. The client uploads directly to storage, then includes the blob ID in a normal create or update:
 
 ```javascript
-// 1. Upload directly to S3
-await fetch(presignedUrl, {
-  method: "PUT",
+// 1. Upload directly to storage
+const uploadHeaders = new Headers(prepareResponse.headers || {});
+uploadHeaders.set("Content-Type", file.type);
+
+await fetch(prepareResponse.url, {
+  method: prepareResponse.method || "PUT",
   body: file,
-  headers: { "Content-Type": file.type }
+  headers: uploadHeaders
 });
 
 // 2. Create the record with the blob attached
@@ -119,7 +151,13 @@ defmodule MyAppWeb.PostLive.Upload do
         byte_size: size
       )
 
-    {:reply, %{url: info.url, method: info.method, blob_id: info.blob.id}, socket}
+    {:reply,
+     %{
+       url: info.url,
+       method: info.method,
+       headers: Map.get(info, :headers, %{}),
+       blob_id: info.blob.id
+     }, socket}
   end
 
   def handle_event("create_post", %{"title" => title, "blob_id" => blob_id}, socket) do
@@ -188,8 +226,14 @@ defmodule MyApp.Post do
           byte_size: input.arguments.byte_size
         )
         |> case do
-          {:ok, %{blob: blob, url: url, method: method}} ->
-            {:ok, %{blob_id: blob.id, url: url, method: to_string(method)}}
+          {:ok, %{blob: blob, url: url, method: method} = info} ->
+            {:ok,
+             %{
+               blob_id: blob.id,
+               url: url,
+               method: to_string(method),
+               headers: Map.get(info, :headers, %{})
+             }}
 
           {:error, error} ->
             {:error, error}
@@ -213,8 +257,8 @@ end
 
 The client flow:
 
-1. `POST /posts/prepare_cover_image_upload` with `{"filename": "photo.jpg"}` — returns `{"blob_id": "...", "url": "https://s3...", "method": "PUT"}`
-2. `PUT` the file directly to the presigned S3 URL
+1. `POST /posts/prepare_cover_image_upload` with `{"filename": "photo.jpg"}` — returns `{"blob_id": "...", "url": "https://...", "method": "PUT", "headers": {}}`
+2. `PUT` the file directly to the presigned storage URL with any returned headers
 3. `POST /posts` with `{"title": "My Post", "cover_image_blob_id": "..."}` — creates the post with the image attached
 
 ## AshGraphql
@@ -257,6 +301,7 @@ mutation {
       blobId
       url
       method
+      headers
     }
   }
 }
