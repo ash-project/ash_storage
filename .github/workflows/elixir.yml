@@ -12,5 +12,6 @@ jobs:
     uses: ash-project/ash/.github/workflows/ash-ci.yml@main
     with:
       postgres: true
+      tenants: false
     secrets:
       HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
