@@ -3,7 +3,8 @@ defmodule AshStorage.Changes.AttachBlob do
   An action change that attaches a pre-uploaded blob (by ID) to the record.
 
   Used for direct uploads where the file was uploaded directly to storage
-  (e.g. via a presigned S3 URL) and the blob record already exists.
+  (e.g. via an S3 presigned URL or Azure Blob SAS URL) and the blob record already
+  exists.
 
       create :create do
         accept [:title]

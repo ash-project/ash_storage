@@ -4,12 +4,16 @@ Direct uploads let clients upload files straight to your storage backend (S3, Mi
 
 The flow has two steps:
 
-1. **Prepare** — your server creates a blob record and returns a presigned URL
-2. **Attach** — the client uploads to the presigned URL, then includes the `blob_id` in a normal create/update action
+1. **Prepare** — your server creates a blob record and returns a signed upload target
+   (for example, an S3 presigned URL or an Azure SAS URL)
+2. **Attach** — the client uploads to that signed target, then includes the `blob_id`
+   in a normal create/update action
 
 ## Setup
 
-Direct uploads require a storage service that supports presigned URLs. `AshStorage.Service.S3` and `AshStorage.Service.AzureBlob` support this out of the box:
+Direct uploads require a storage service that can delegate client uploads via signed URLs or forms.
+`AshStorage.Service.S3` supports S3 presigned URLs/forms, and
+`AshStorage.Service.AzureBlob` supports blob-level Azure SAS URLs:
 
 ```elixir
 storage do
@@ -44,11 +48,18 @@ end
 
 Azure browser uploads require CORS on the storage account and the `x-ms-blob-type: BlockBlob` request header. `AshStorage.Service.AzureBlob.direct_upload/2` includes that header in the returned upload info.
 
+Azure terminology note: Azure SAS URLs can be handed to clients for a specific blob,
+so they cover AshStorage's single-blob read and direct `Put Blob` upload flows. They
+are not a perfect feature-for-feature match for S3 request presigning: this service
+does not currently support block-level/per-part upload signing, resumable uploads,
+or Azure AD/user-delegation SAS generation.
+
 Azure-specific checklist:
 
 - Create the blob container before uploads begin; the service creates blobs, not containers.
 - Configure Blob service CORS for your browser origin, `PUT`/`OPTIONS`, and the request headers your client sends, including `x-ms-blob-type` and `content-type`.
 - Prefer `:account_key_env` or `:sas_token_env` over literal secrets. Literal `:account_key` and `:sas_token` values work for immediate service requests but are not persisted on blob records. Use env-backed credentials for attachment flows that later operate from stored blobs, including purge, analysis, and variants.
+- If shared-key access is disabled on the storage account, configure a pre-generated SAS with `:sas_token_env` for now; managed identity / Azure AD user-delegation SAS support is not implemented yet.
 - If you provide a static SAS token via `:sas_token`/`:sas_token_env`, it is reused for every Azure operation. Use a container/account SAS with the needed permissions: read (`r`) for URLs/downloads/existence checks, create/write (`c`, `w`) for uploads/direct uploads, and delete (`d`) for purges.
 
 Add the `AshStorage.Changes.AttachBlob` change to your create or update actions:
@@ -78,7 +89,7 @@ When `cover_image_blob_id` is `nil`, the change is skipped. For `has_one_attache
 
 ## Step 1: Prepare the upload
 
-Call `prepare_direct_upload/3` to create a blob record and get a presigned URL:
+Call `prepare_direct_upload/3` to create a blob record and get a signed upload URL:
 
 ```elixir
 {:ok, %{blob: blob, url: url, method: method}} =
@@ -92,7 +103,7 @@ Call `prepare_direct_upload/3` to create a blob record and get a presigned URL:
 The returned map contains:
 
 - `:blob` — the created blob record (not yet attached to anything)
-- `:url` — the presigned URL to upload to
+- `:url` — the signed URL to upload to (an S3 presigned URL or Azure SAS URL)
 - `:method` — `:put` or `:post` depending on configuration
 - `:headers` — headers to include with the direct upload, when required by the service
 
@@ -112,7 +123,7 @@ The JS example below is for presigned PUT. For presigned POST, build a `FormData
 
 ## Step 2: Client uploads and attaches
 
-Send the presigned URL and blob ID to your client. The client uploads directly to storage, then includes the blob ID in a normal create or update:
+Send the signed URL and blob ID to your client. The client uploads directly to storage, then includes the blob ID in a normal create or update:
 
 ```javascript
 // 1. Upload directly to storage
@@ -258,7 +269,7 @@ end
 The client flow:
 
 1. `POST /posts/prepare_cover_image_upload` with `{"filename": "photo.jpg"}` — returns `{"blob_id": "...", "url": "https://...", "method": "PUT", "headers": {}}`
-2. `PUT` the file directly to the presigned storage URL with any returned headers
+2. `PUT` the file directly to the signed storage URL with any returned headers
 3. `POST /posts` with `{"title": "My Post", "cover_image_blob_id": "..."}` — creates the post with the image attached
 
 ## AshGraphql
@@ -306,7 +317,7 @@ mutation {
   }
 }
 
-# 2. Upload directly to the presigned URL (outside GraphQL)
+# 2. Upload directly to the signed URL (outside GraphQL)
 
 # 3. Create with blob attached
 mutation {

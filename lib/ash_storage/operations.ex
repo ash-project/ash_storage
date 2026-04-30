@@ -63,9 +63,11 @@ defmodule AshStorage.Operations do
   end
 
   @doc """
-  Prepare a direct upload: create a blob record and return a presigned URL.
+  Prepare a direct upload: create a blob record and return a signed upload target.
 
-  This stays as a standalone function since no parent record is involved yet.
+  The returned target is service-specific, such as an S3 presigned URL/form or an
+  Azure Blob SAS URL. This stays as a standalone function since no parent record
+  is involved yet.
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
