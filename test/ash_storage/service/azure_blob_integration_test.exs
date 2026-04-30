@@ -178,7 +178,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
                "#{@endpoint_url}/#{@container}/folder/my%20file.txt"
     end
 
-    test "generates a presigned URL that works" do
+    test "generates a SAS URL that works" do
       key = unique_key()
       AzureBlob.upload(key, "presigned content", ctx())
 
@@ -188,7 +188,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert {:ok, %{status: 200, body: "presigned content"}} = Req.get(url)
     end
 
-    test "presigned URL respects expires_in" do
+    test "SAS URL respects expires_in" do
       key = unique_key()
       AzureBlob.upload(key, "expiry test", ctx())
 
@@ -399,7 +399,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       post = Ash.load!(post, :avatar_url)
       assert post.avatar_url == "#{@endpoint_url}/#{@container}/#{blob.key}"
 
-      # Presigned URL calculation via config override.
+      # SAS URL calculation via config override.
       Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
         storage: [
           service: {AshStorage.Service.AzureBlob, Keyword.put(@service_opts, :presigned, true)}
@@ -410,6 +410,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       post = Ash.get!(AshStorage.Test.ConfigurablePost, post.id)
       post = Ash.load!(post, :avatar_url)
       assert post.avatar_url =~ "sig="
+      assert {:ok, %{status: 200, body: "azure file content"}} = Req.get(post.avatar_url)
 
       # Purge should remove from Azure Blob Storage. The persisted service opts only
       # contain the env var name, so this also verifies env-backed async credentials.
@@ -483,7 +484,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
         ]
       )
 
-      # Step 1: Prepare direct upload — creates blob, gets presigned URL and headers.
+      # Step 1: Prepare direct upload — creates blob, gets SAS URL and headers.
       {:ok, %{blob: blob, url: upload_url, method: :put, headers: headers}} =
         AshStorage.Operations.prepare_direct_upload(
           AshStorage.Test.ConfigurablePost,
@@ -498,7 +499,7 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert upload_url =~ "sig="
       assert headers["x-ms-blob-type"] == "BlockBlob"
 
-      # Step 2: Client uploads directly to Azure using the presigned PUT URL.
+      # Step 2: Client uploads directly to Azure using the SAS-signed PUT URL.
       assert {:ok, %{status: status}} =
                Req.put(upload_url, body: "direct content", headers: headers)
 

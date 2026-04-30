@@ -62,6 +62,12 @@ if Code.ensure_loaded?(Req) do
     read (`r`) for downloads/URLs/existence checks, create/write (`c`, `w`) for
     uploads and direct uploads, and delete (`d`) for purge/delete.
 
+    Azure SAS URLs can be given to clients for a specific blob, which covers this
+    service's read URLs and single-request direct uploads. They are not identical
+    to S3 request presigning: this service does not currently support
+    block-level/per-part upload signing, resumable uploads, or Azure AD/user
+    delegation SAS generation.
+
     For browser direct uploads, configure CORS on the storage account to allow your
     application origin, the `PUT`/`OPTIONS` methods, and the request headers your
     client sends, including `x-ms-blob-type` and `content-type`.
@@ -195,7 +201,7 @@ if Code.ensure_loaded?(Req) do
     end
 
     @doc """
-    Generate a presigned PUT URL for direct client-side upload.
+    Generate a SAS-signed PUT URL for direct client-side upload.
 
     Azure Blob Storage direct uploads require the `x-ms-blob-type: BlockBlob`
     header. The returned map includes this header.

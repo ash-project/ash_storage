@@ -83,11 +83,11 @@ defmodule AshStorage.Service do
   @callback delete_many([key()], Context.t()) :: :ok | {:error, term()}
 
   @doc """
-  Generate a presigned URL or form for direct client-side upload.
+  Generate a signed URL or form for direct client-side upload.
 
   Returns a map with at minimum a `:url` key. Depending on the service,
-  it may also include `:headers` (for presigned PUT) or `:fields` (for
-  presigned POST/form uploads).
+  it may also include `:headers` (for signed PUT URLs such as S3 presigned
+  URLs or Azure SAS URLs) or `:fields` (for S3 presigned POST/form uploads).
   """
   @callback direct_upload(key(), Context.t()) ::
               {:ok, map()} | {:error, term()}
