@@ -91,7 +91,7 @@ defmodule AshStorage.Service.Disk do
     path =
       case Keyword.get(opts, :original_filename) do
         nil -> key
-        filename -> "#{key}/#{URI.encode(filename)}"
+        filename -> "#{key}/#{URI.encode(filename, &URI.char_unreserved?/1)}"
       end
 
     plain_url = "#{base_url}/#{path}"

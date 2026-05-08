@@ -39,31 +39,24 @@ defmodule AshStorage.Plug.DiskServe do
   # sobelow_skip ["Traversal.SendFile", "Traversal.FileModule", "XSS.ContentType"]
   @impl true
   def call(conn, opts) do
-    case conn.path_info do
-      [] ->
+    with [key | _] = path_info <- conn.path_info,
+         :ok <- verify_signature(conn, opts) do
+      path = Path.join(opts.root, key)
+
+      if File.exists?(path) do
+        content_type = path_info |> List.last() |> MIME.from_path()
+
+        conn
+        |> Plug.Conn.put_resp_content_type(content_type)
+        |> maybe_put_disposition(conn)
+        |> Plug.Conn.send_file(200, path)
+        |> Plug.Conn.halt()
+      else
         conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-
-      path_info ->
-        case verify_signature(conn, opts) do
-          :ok ->
-            key = hd(path_info)
-            path = Path.join(opts.root, key)
-
-            if File.exists?(path) do
-              content_type = path_info |> List.last() |> MIME.from_path()
-
-              conn
-              |> Plug.Conn.put_resp_content_type(content_type)
-              |> maybe_put_disposition(conn)
-              |> Plug.Conn.send_file(200, path)
-              |> Plug.Conn.halt()
-            else
-              conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-            end
-
-          {:error, :forbidden} ->
-            conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
-        end
+      end
+    else
+      [] -> conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
+      {:error, :forbidden} -> conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
     end
   end
 
