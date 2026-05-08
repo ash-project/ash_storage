@@ -38,7 +38,13 @@ defmodule AshStorage.Calculations.Url do
              tenant: Map.get(context, :tenant)
            )
 
-         service_mod.url(attachment.blob.key, ctx)
+         url_ctx = %{
+           ctx
+           | service_opts:
+               Keyword.put(ctx.service_opts, :original_filename, attachment.blob.filename)
+         }
+
+         service_mod.url(attachment.blob.key, url_ctx)
        else
          _ -> nil
        end

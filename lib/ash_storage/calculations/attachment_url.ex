@@ -30,8 +30,17 @@ defmodule AshStorage.Calculations.AttachmentUrl do
     {:ok,
      Enum.map(records, fn record ->
        case Map.get(record, attachment_name) do
-         nil -> nil
-         attachment -> service_mod.url(attachment.blob.key, ctx)
+         nil ->
+           nil
+
+         attachment ->
+           url_ctx = %{
+             ctx
+             | service_opts:
+                 Keyword.put(ctx.service_opts, :original_filename, attachment.blob.filename)
+           }
+
+           service_mod.url(attachment.blob.key, url_ctx)
        end
      end)}
   end

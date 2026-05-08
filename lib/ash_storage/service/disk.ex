@@ -87,7 +87,14 @@ defmodule AshStorage.Service.Disk do
   def url(key, %AshStorage.Service.Context{} = ctx) do
     opts = ctx.service_opts
     base_url = Keyword.fetch!(opts, :base_url)
-    plain_url = "#{base_url}/#{key}"
+
+    path =
+      case Keyword.get(opts, :original_filename) do
+        nil -> key
+        filename -> "#{key}/#{URI.encode(filename)}"
+      end
+
+    plain_url = "#{base_url}/#{path}"
 
     case Keyword.get(opts, :secret) do
       nil ->
