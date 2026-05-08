@@ -92,6 +92,17 @@ defmodule AshStorage.Service.DiskTest do
       assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123"
     end
 
+    test "encodes slash in :original_filename to prevent path splitting", %{root: root} do
+      ctx =
+        Context.new(
+          root: root,
+          base_url: "http://localhost:4000/storage",
+          original_filename: "icons/arrow.svg"
+        )
+
+      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123/icons%2Farrow.svg"
+    end
+
     test "signed URL with :original_filename signs over storage key only", %{root: root} do
       secret = "test-secret-32bytes!!!!!!!!!!!!!!"
 
