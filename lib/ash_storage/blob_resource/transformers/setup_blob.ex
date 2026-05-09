@@ -126,6 +126,8 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
          {:ok, dsl_state} <- add_complete_analysis_action(dsl_state),
          {:ok, dsl_state} <- add_run_pending_analyzers_action(dsl_state),
          {:ok, dsl_state} <- add_create_variant_action(dsl_state),
+         {:ok, dsl_state} <- add_complete_variant_action(dsl_state),
+         {:ok, dsl_state} <- add_run_pending_variant_action(dsl_state),
          {:ok, dsl_state} <- add_run_pending_variants_action(dsl_state) do
       {:ok, purge_change} =
         Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.PurgeFile)
@@ -181,6 +183,38 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
     Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_variants,
       accept: [],
       require_atomic?: false,
+      changes: [change]
+    )
+  end
+
+  defp add_run_pending_variant_action(dsl_state) do
+    {:ok, variant_name_arg} =
+      Ash.Resource.Builder.build_action_argument(:variant_name, :string, allow_nil?: false)
+
+    {:ok, change} =
+      Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.RunPendingVariant)
+
+    Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_variant,
+      accept: [],
+      arguments: [variant_name_arg],
+      require_atomic?: false,
+      changes: [change]
+    )
+  end
+
+  defp add_complete_variant_action(dsl_state) do
+    {:ok, variant_name_arg} =
+      Ash.Resource.Builder.build_action_argument(:variant_name, :string, allow_nil?: false)
+
+    {:ok, status_arg} =
+      Ash.Resource.Builder.build_action_argument(:status, :string, allow_nil?: false)
+
+    {:ok, change} =
+      Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.CompleteVariant)
+
+    Ash.Resource.Builder.add_action(dsl_state, :update, :complete_variant,
+      accept: [],
+      arguments: [variant_name_arg, status_arg],
       changes: [change]
     )
   end
