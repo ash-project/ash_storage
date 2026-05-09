@@ -1,82 +1,34 @@
 defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
   @moduledoc """
-  A change that generates all pending variants for a blob.
+  A change that fans out one Oban job per still-pending variant on the blob,
+  delegating the actual work to the per-variant `:run_pending_variant` action.
 
-  Used by the `:run_pending_variants` action, typically triggered by AshOban.
-  Iterates through the blob's pending_variants map, finds any with `"status" => "pending"`,
-  and generates each one via `AshStorage.VariantGenerator`.
+  Used by the `:run_pending_variants` action. Typically invoked from the
+  AshOban scheduler (cron-driven recovery) for blobs whose `pending_variants`
+  flag is still `true` — for example because an `:run_pending_variant` enqueue
+  was lost. Iterates `metadata["__pending_variants__"]`, finds entries with
+  `"status" => "pending"`, and re-enqueues each via
+  `AshOban.run_trigger(blob, :run_pending_variant, action_arguments: %{...})`.
+
+  This change does **not** generate variants itself; it only schedules jobs.
+  Calling `Ash.update(blob, %{}, action: :run_pending_variants)` synchronously
+  produces `{:ok, blob}` with the same data, but per-variant jobs land in
+  Oban for asynchronous execution.
   """
   use Ash.Resource.Change
 
   @impl true
   def change(changeset, _opts, _context) do
     Ash.Changeset.after_action(changeset, fn _changeset, blob ->
-      pending_variants = blob.metadata["__pending_variants__"] || %{}
-
-      pending =
-        Enum.filter(pending_variants, fn {_name, info} ->
-          info["status"] == "pending"
-        end)
-
-      Enum.reduce_while(pending, {:ok, blob}, fn {variant_name, info}, {:ok, blob} ->
-        # sobelow_skip ["DOS.BinToAtom"]
-        module = String.to_existing_atom(info["module"])
-        opts = deserialize_opts(info["opts"] || %{})
-        resource_module = String.to_existing_atom(info["resource"])
-        attachment_name = String.to_existing_atom(info["attachment"])
-
-        {:ok, attachment_def} = AshStorage.Info.attachment(resource_module, attachment_name)
-
-        variant_def = %AshStorage.VariantDefinition{
-          name: String.to_existing_atom(variant_name),
-          module: if(opts == [], do: module, else: {module, opts}),
-          generate: :oban
-        }
-
-        new_status =
-          case AshStorage.VariantGenerator.generate(
-                 blob,
-                 variant_def,
-                 resource_module,
-                 attachment_def
-               ) do
-            {:ok, _variant_blob} -> "complete"
-            {:error, :not_accepted} -> "skipped"
-            {:error, error} -> {:halt_error, error}
-          end
-
-        case new_status do
-          {:halt_error, error} ->
-            {:halt, {:error, error}}
-
-          status ->
-            updated_variants =
-              put_in(pending_variants, [variant_name, "status"], status)
-
-            still_pending? =
-              Enum.any?(updated_variants, fn {_k, v} -> v["status"] == "pending" end)
-
-            metadata = Map.put(blob.metadata, "__pending_variants__", updated_variants)
-
-            update_params =
-              if still_pending? do
-                %{metadata: metadata}
-              else
-                %{metadata: metadata, pending_variants: false}
-              end
-
-            case Ash.update(blob, update_params, action: :update_metadata) do
-              {:ok, blob} -> {:cont, {:ok, blob}}
-              {:error, error} -> {:halt, {:error, error}}
-            end
-        end
+      blob.metadata
+      |> Map.get("__pending_variants__", %{})
+      |> Enum.filter(fn {_name, info} -> info["status"] == "pending" end)
+      |> Enum.each(fn {variant_name, _info} ->
+        opts = [action_arguments: %{variant_name: variant_name}]
+        AshOban.run_trigger(blob, :run_pending_variant, opts)
       end)
+
+      {:ok, blob}
     end)
   end
-
-  defp deserialize_opts(opts_map) when is_map(opts_map) do
-    Enum.map(opts_map, fn {k, v} -> {String.to_existing_atom(k), v} end)
-  end
-
-  defp deserialize_opts(_), do: []
 end
