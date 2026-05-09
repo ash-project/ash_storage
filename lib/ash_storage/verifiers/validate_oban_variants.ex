@@ -24,7 +24,7 @@ defmodule AshStorage.Verifiers.ValidateObanVariants do
     if Code.ensure_loaded?(AshOban.Info) do
       triggers = AshOban.Info.oban_triggers(blob_resource)
 
-      if Enum.any?(triggers, &(&1.action == :run_pending_variants)) do
+      if Enum.any?(triggers, &(&1.action in [:run_pending_variant, :run_pending_variants])) do
         :ok
       else
         {:error,
