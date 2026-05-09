@@ -53,8 +53,11 @@ defmodule AshStorage.Changes.Attach do
               AshOban.run_trigger(blob, :run_pending_analyzers)
             end
 
-            if has_oban_variants?(attachment_def) do
-              AshOban.run_trigger(blob, :run_pending_variants)
+            for variant_def <- attachment_def.variants || [],
+                variant_def.generate == :oban do
+              AshOban.run_trigger(blob, :run_pending_variant,
+                action_arguments: %{variant_name: to_string(variant_def.name)}
+              )
             end
 
             record =
@@ -452,11 +455,6 @@ defmodule AshStorage.Changes.Attach do
         {:error, error} -> {:halt, {:error, error}}
       end
     end)
-  end
-
-  defp has_oban_variants?(attachment_def) do
-    (attachment_def.variants || [])
-    |> Enum.any?(&(&1.generate == :oban))
   end
 
   defp store_oban_variants(blob, attachment_def, resource) do
