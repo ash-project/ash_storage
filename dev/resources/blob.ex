@@ -36,6 +36,14 @@ defmodule Demo.Blob do
         worker_module_name(Demo.Blob.RunPendingVariantsWorker)
       end
 
+      trigger :run_pending_variant do
+        action :run_pending_variant
+        read_action :read
+        max_attempts(3)
+        scheduler_module_name(Demo.Blob.RunPendingVariantScheduler)
+        worker_module_name(Demo.Blob.RunPendingVariantWorker)
+      end
+
       trigger :run_pending_analyzers do
         action :run_pending_analyzers
         read_action :read
