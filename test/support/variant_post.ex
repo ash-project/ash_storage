@@ -41,6 +41,22 @@ defmodule AshStorage.Test.FailingVariant do
   def transform(_source, _dest, _opts), do: {:error, :transform_failed}
 end
 
+defmodule AshStorage.Test.ReverseVariant do
+  @moduledoc false
+  @behaviour AshStorage.Variant
+
+  @impl true
+  def accept?("text/" <> _), do: true
+  def accept?(_), do: false
+
+  @impl true
+  def transform(source_path, dest_path, _opts) do
+    content = File.read!(source_path)
+    File.write!(dest_path, String.reverse(content))
+    {:ok, %{content_type: "text/plain"}}
+  end
+end
+
 defmodule AshStorage.Test.VariantPost do
   @moduledoc false
   use Ash.Resource,

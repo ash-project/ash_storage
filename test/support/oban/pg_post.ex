@@ -18,6 +18,7 @@ defmodule AshStorage.Test.PgPost do
     has_one_attached :cover_image do
       variant(:eager_upper, AshStorage.Test.UppercaseVariant, generate: :eager)
       variant(:oban_upper, AshStorage.Test.UppercaseVariant, generate: :oban)
+      variant(:oban_reverse, AshStorage.Test.ReverseVariant, generate: :oban)
     end
 
     has_many_attached(:documents, dependent: :detach)
