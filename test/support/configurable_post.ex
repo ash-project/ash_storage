@@ -16,6 +16,38 @@ defmodule AshStorage.Test.ConfigurablePost do
     attachment_resource(AshStorage.Test.PolymorphicAttachment)
 
     has_one_attached(:avatar)
+
+    has_one_attached(:mirrored_avatar,
+      service:
+        {AshStorage.Service.Test,
+         [
+           mirrors: [
+             {AshStorage.Service.Test, name: :mirror_integration_primary},
+             {AshStorage.Service.Test, name: :mirror_integration_secondary}
+           ]
+         ]}
+    )
+
+    has_one_attached(:legacy_mirror_avatar,
+      service:
+        {AshStorage.Service.Mirror,
+         services: [
+           {AshStorage.Service.Test, []},
+           {AshStorage.Service.Test, name: :legacy_mirror_a},
+           {AshStorage.Service.Test, name: :legacy_mirror_b}
+         ]}
+    )
+
+    has_many_attached(:mirrored_documents,
+      service:
+        {AshStorage.Service.Test,
+         [
+           mirrors: [
+             {AshStorage.Service.Test, name: :documents_mirror_a},
+             {AshStorage.Service.Test, name: :documents_mirror_b}
+           ]
+         ]}
+    )
   end
 
   attributes do
