@@ -4,6 +4,8 @@ defmodule AshStorage.VariantDefinition do
     :name,
     :module,
     :generate,
+    :group,
+    :order,
     :__spark_metadata__
   ]
 
@@ -24,6 +26,26 @@ defmodule AshStorage.VariantDefinition do
       doc:
         "When to generate this variant. `:on_demand` generates on first URL request, `:eager` during attach, `:oban` via background job.",
       default: :on_demand
+    ],
+    group: [
+      type: {:or, [:atom, nil]},
+      default: nil,
+      doc: """
+      Co-locates this variant with every other oban variant that shares the same group. \
+      All variants in a group run serially in a single Oban job, sharing one download \
+      and one worker process. Variants without a group run in their own jobs (the default). \
+      Trade-off: variants in a group share a retry — if any one fails, Oban retries the \
+      whole group. Only meaningful with `generate: :oban`.
+      """
+    ],
+    order: [
+      type: :integer,
+      default: 0,
+      doc: """
+      Dispatch tier. Lower runs before higher. Units (variants or groups) at the same \
+      `order` run in parallel. Variants in the same group must declare the same order — \
+      the verifier enforces this. Only meaningful with `generate: :oban`.
+      """
     ]
   ]
 
@@ -41,6 +63,10 @@ defmodule AshStorage.VariantDefinition do
 
   @doc """
   Compute a digest of the variant definition for cache invalidation.
+
+  Only the transform inputs (`module` + `opts`) feed the digest — `group` and
+  `order` are scheduling concerns and changing them must not invalidate
+  already-generated variant blobs.
   """
   def digest(%__MODULE__{} = defn) do
     {mod, opts} = normalize(defn)
