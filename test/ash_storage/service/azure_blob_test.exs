@@ -483,6 +483,28 @@ defmodule AshStorage.Service.AzureBlobTest do
       assert {:error, {400, _body}} = AzureBlob.upload(key, "boom", ctx)
     end
 
+    test "sends Content-MD5 and x-ms-blob-content-md5 headers on PUT when ctx has expected_md5",
+         %{endpoint_url: endpoint_url, server_state: server_state} do
+      ctx = http_context(endpoint_url) |> Context.put_expected_md5("YWJjMTIz")
+      :ok = AzureBlob.upload("with/md5.txt", "any data", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      assert put_request.headers["content-md5"] == "YWJjMTIz"
+      assert put_request.headers["x-ms-blob-content-md5"] == "YWJjMTIz"
+    end
+
+    test "omits MD5 headers when ctx expected_md5 is nil", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx = http_context(endpoint_url)
+      :ok = AzureBlob.upload("without/md5.txt", "any data", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      refute Map.has_key?(put_request.headers, "content-md5")
+      refute Map.has_key?(put_request.headers, "x-ms-blob-content-md5")
+    end
+
     test "surfaces unexpected download statuses as errors", %{endpoint_url: endpoint_url} do
       ctx = http_context(endpoint_url)
       key = "force-status-400/explode.txt"
