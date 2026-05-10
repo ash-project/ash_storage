@@ -276,8 +276,50 @@ AshStorage ships with:
 - `AshStorage.Service.Test` — In-memory storage for tests
 - `AshStorage.Service.S3` — S3-compatible storage (requires [`req_s3`](https://hex.pm/packages/req_s3))
 - `AshStorage.Service.AzureBlob` — Azure Blob Storage (requires [`req`](https://hex.pm/packages/req))
+- `AshStorage.Service.Mirror` — Composite service that fans uploads/deletes out across multiple child services for redundancy
 
 Implement the `AshStorage.Service` behaviour to add custom backends.
+
+### Mirroring across multiple backends
+
+`AshStorage.Service.Mirror` wraps an ordered list of child services. Writes (`upload`, `delete`) fan out sequentially across every child; reads (`download`, `exists?`) consult the primary first and fall through to secondaries on `:not_found`; `url/2` and `direct_upload/2` always go through the primary.
+
+```elixir
+storage do
+  service {AshStorage.Service.Mirror,
+    services: [
+      {AshStorage.Service.S3, bucket: "primary"},
+      {AshStorage.Service.S3, bucket: "backup", region: "eu-west-1"}
+    ]}
+end
+```
+
+Failures are strict and fail-fast: if any child fails to upload or delete, the operation halts immediately without rolling back work done on earlier children. Orphan cleanup (a separate roadmap item) is responsible for reaping leftovers.
+
+As a shorthand, you can decorate any service tuple with a `:mirrors` option and it expands into a Mirror automatically:
+
+```elixir
+storage do
+  service {AshStorage.Service.S3, [bucket: "primary", mirrors: [
+    {AshStorage.Service.S3, bucket: "backup", region: "eu-west-1"}
+  ]]}
+end
+```
+
+is equivalent to writing the Mirror tuple yourself:
+
+```elixir
+storage do
+  service {AshStorage.Service.Mirror, services: [
+    {AshStorage.Service.S3, bucket: "primary"},
+    {AshStorage.Service.S3, bucket: "backup", region: "eu-west-1"}
+  ]}
+end
+```
+
+The expansion happens once at service-resolution time, so the `:mirrors` form works the same way at the resource level, per-attachment (`has_one_attached :avatar, service: {…, mirrors: […]}`), per-attachment for `has_many_attached`, or via app config.
+
+Mirror is configured at runtime via the resource's `storage` DSL or app config; the child services are *not* persisted on the blob row. Synchronous attach/upload/url/download/delete work normally because the live config is in scope. Async paths that rebuild a context purely from `blob.parsed_service_opts` (e.g. AshOban purge jobs) need to re-resolve the Mirror config from app config before invoking the service — calling Mirror with no `:services` raises a clear error.
 
 ### Live service integration tests
 
@@ -296,8 +338,8 @@ The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docke
 - ~~**Variants**~~ ✅ — File transformations: image resizing/conversion, PDF-to-thumbnail, video thumbnails, and any custom transform. Subsumes the previewer concept — a PDF thumbnail is just a variant. Three generation modes: `:on_demand` (default, generated inline on first URL request), `:eager` (during attach), `:oban` (background job via AshOban). Variant blobs are self-referential on the blob resource with digest-based cache invalidation. Named variants declared in DSL via `variant :name, {Module, opts}`. Custom transformers implement `AshStorage.Variant` behaviour.
 - **Per-variant oban jobs** — Currently all pending variants for a blob run in a single oban job. Refactor so each variant gets its own job lifecycle, enabling parallel generation and independent retries.
 - **Checksum verification** — Integrity checking via checksums on upload
-- **Redirect handler** — A plug that redirects to the storage service URL instead of proxying
-- **Mirroring** — Mirror service that replicates uploads across multiple backends for redundancy
+- ~~**Redirect handler**~~ ✅ — `AshStorage.Plug.Redirect` issues an HTTP redirect (default 302) to the underlying service's `url/2` instead of streaming bytes. Useful when you want app-level auth/signature checks but don't want to proxy bytes through the application. Supports the same `?token=&expires=` HMAC verification as `AshStorage.Plug.Proxy`, and forwards `?disposition=&filename=` query params into service opts so backends like S3/Azure can encode them into presigned URLs.
+- ~~**Mirroring**~~ ✅ — `AshStorage.Service.Mirror` fans `upload`/`delete` out across an ordered list of child services for redundancy. Reads consult the primary first and fall through to secondaries on `:not_found`. `url/2` and `direct_upload/2` go through the primary. Strict, sequential, fail-fast.
 - **Orphan cleanup** — Periodic cleanup of blobs without files or files without blobs. With AshOban: scheduled job. Without: manual invocation via `AshStorage.Operations.cleanup_orphans/1`.
 
 ### Azure Blob Storage follow-ups
