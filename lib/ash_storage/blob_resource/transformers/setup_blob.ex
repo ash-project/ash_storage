@@ -128,7 +128,8 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
          {:ok, dsl_state} <- add_create_variant_action(dsl_state),
          {:ok, dsl_state} <- add_complete_variant_action(dsl_state),
          {:ok, dsl_state} <- add_run_pending_variant_action(dsl_state),
-         {:ok, dsl_state} <- add_run_pending_variants_action(dsl_state) do
+         {:ok, dsl_state} <- add_run_pending_variants_action(dsl_state),
+         {:ok, dsl_state} <- add_schedule_pending_variants_action(dsl_state) do
       {:ok, purge_change} =
         Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.PurgeFile)
 
@@ -176,17 +177,6 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
     )
   end
 
-  defp add_run_pending_variants_action(dsl_state) do
-    {:ok, change} =
-      Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.RunPendingVariants)
-
-    Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_variants,
-      accept: [],
-      require_atomic?: false,
-      changes: [change]
-    )
-  end
-
   defp add_run_pending_variant_action(dsl_state) do
     {:ok, variant_name_arg} =
       Ash.Resource.Builder.build_action_argument(:variant_name, :string, allow_nil?: false)
@@ -197,6 +187,37 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
     Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_variant,
       accept: [],
       arguments: [variant_name_arg],
+      require_atomic?: false,
+      changes: [change]
+    )
+  end
+
+  defp add_run_pending_variants_action(dsl_state) do
+    {:ok, variant_name_arg} =
+      Ash.Resource.Builder.build_action_argument(:variant_name, :string, allow_nil?: true)
+
+    {:ok, group_arg} =
+      Ash.Resource.Builder.build_action_argument(:group, :string, allow_nil?: true)
+
+    {:ok, change} =
+      Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.RunPendingVariants)
+
+    Ash.Resource.Builder.add_action(dsl_state, :update, :run_pending_variants,
+      accept: [],
+      arguments: [variant_name_arg, group_arg],
+      require_atomic?: false,
+      changes: [change]
+    )
+  end
+
+  defp add_schedule_pending_variants_action(dsl_state) do
+    {:ok, change} =
+      Ash.Resource.Builder.build_action_change(
+        AshStorage.BlobResource.Changes.SchedulePendingVariants
+      )
+
+    Ash.Resource.Builder.add_action(dsl_state, :update, :schedule_pending_variants,
+      accept: [],
       require_atomic?: false,
       changes: [change]
     )
