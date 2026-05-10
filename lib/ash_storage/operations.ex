@@ -193,6 +193,32 @@ defmodule AshStorage.Operations do
   end
 
   @doc """
+  Download a blob's bytes from its storage service, verifying the body's MD5
+  against `blob.checksum` when one is recorded.
+
+  Internal callers (analyzers, variant generation) should use this instead of
+  calling `Service.download/2` directly so verification stays consistent.
+  External callers that don't want the integrity check can keep calling the
+  service callback themselves.
+
+  ## Options
+  - `:actor` - the current actor
+  - `:tenant` - the current tenant
+  """
+  def download(blob, opts \\ []) do
+    ctx =
+      blob
+      |> build_blob_context(opts)
+      |> Context.put_expected_md5(presence(blob.checksum))
+
+    blob.service_name.download(blob.key, ctx)
+  end
+
+  defp presence(nil), do: nil
+  defp presence(""), do: nil
+  defp presence(value), do: value
+
+  @doc """
   Run a specific analyzer on a blob, downloading the file from storage if needed.
 
   This is intended for async analysis via AshOban jobs. It downloads the blob's file,
@@ -209,11 +235,10 @@ defmodule AshStorage.Operations do
     case Map.fetch(blob_analyzers, analyzer_key) do
       {:ok, analyzer_entry} ->
         analyzer_opts = analyzer_entry["opts"] || %{}
-        service_mod = blob.service_name
         content_type = blob.content_type || "application/octet-stream"
 
         if analyzer_module.accept?(content_type) do
-          with {:ok, data} <- service_mod.download(blob.key, build_blob_context(blob, opts)) do
+          with {:ok, data} <- download(blob, opts) do
             path =
               Path.join(
                 System.tmp_dir!(),
