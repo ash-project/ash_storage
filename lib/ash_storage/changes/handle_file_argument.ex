@@ -293,6 +293,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     key = AshStorage.generate_key()
     checksum = :crypto.hash(:md5, data) |> Base.encode64()
     byte_size = byte_size(data)
+    ctx = Context.put_expected_md5(ctx, checksum)
 
     with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, data, ctx)) do
       blob_resource = Info.storage_blob_resource!(resource)

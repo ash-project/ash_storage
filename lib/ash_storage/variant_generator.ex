@@ -25,8 +25,7 @@ defmodule AshStorage.VariantGenerator do
 
   defp do_generate(source_blob, module, opts, digest, variant_name, resource, attachment_def) do
     with {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
-         {:ok, source_data} <-
-           download_source(source_blob, service_mod, service_opts, resource, attachment_def),
+         {:ok, source_data} <- AshStorage.Operations.download(source_blob),
          {:ok, transform_result, variant_data} <- run_transform(module, opts, source_data) do
       upload_and_create_variant(
         source_blob,
@@ -40,16 +39,6 @@ defmodule AshStorage.VariantGenerator do
         attachment_def
       )
     end
-  end
-
-  defp download_source(source_blob, service_mod, service_opts, resource, attachment_def) do
-    ctx =
-      Context.new(service_opts,
-        resource: resource,
-        attachment: attachment_def
-      )
-
-    service_mod.download(source_blob.key, ctx)
   end
 
   # sobelow_skip ["Traversal.FileModule"]
@@ -108,6 +97,7 @@ defmodule AshStorage.VariantGenerator do
         attachment: attachment_def
       )
 
+    ctx = Context.put_expected_md5(ctx, checksum)
     blob_resource = Info.storage_blob_resource!(resource)
 
     with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
