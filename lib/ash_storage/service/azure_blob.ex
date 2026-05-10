@@ -120,6 +120,9 @@ if Code.ensure_loaded?(Req) do
       # Azure's `Put Blob` rejects Transfer-Encoding: chunked, which Req+Finch
       # emit for any non-iodata body (including File.Stream). Materialise the
       # stream so the request goes out with a fixed Content-Length.
+      # Single-shot Put Blob only. Block uploads (Put Block / Put Block List)
+      # need per-block Content-MD5 + persisted x-ms-blob-content-md5 on the
+      # assembly call; see documentation/topics/checksum-verification.md.
       data = materialize_body(data)
 
       with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "cw", expires_in: 900) do
@@ -128,6 +131,10 @@ if Code.ensure_loaded?(Req) do
           |> base_headers()
           |> Map.put("x-ms-blob-type", "BlockBlob")
           |> maybe_put("content-type", Keyword.get(ctx.service_opts, :content_type))
+          |> maybe_put("content-md5", ctx.expected_md5)
+          # Persist MD5 as a blob property so future Get/Head responses carry
+          # it back, enabling cheap download-side verification.
+          |> maybe_put("x-ms-blob-content-md5", ctx.expected_md5)
 
         case Req.put(url, body: data, headers: headers) do
           {:ok, %{status: status}} when status in 200..299 -> :ok
@@ -141,13 +148,14 @@ if Code.ensure_loaded?(Req) do
     def download(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900) do
-        case Req.get(url, headers: base_headers(ctx)) do
-          {:ok, %{status: 200, body: body}} -> {:ok, body}
-          {:ok, %{status: 404}} -> {:error, :not_found}
-          {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-          {:error, reason} -> {:error, reason}
-        end
+      with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900),
+           {:ok, %{status: 200, body: body}} <- Req.get(url, headers: base_headers(ctx)),
+           :ok <- verify_md5(body, ctx.expected_md5) do
+        {:ok, body}
+      else
+        {:ok, %{status: 404}} -> {:error, :not_found}
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
       end
     end
 
@@ -175,6 +183,33 @@ if Code.ensure_loaded?(Req) do
           {:ok, %{status: 404}} -> {:ok, false}
           {:ok, %{status: status}} -> {:error, {:unexpected_status, status}}
           {:error, reason} -> {:error, reason}
+        end
+      end
+    end
+
+    @impl true
+    def head(key, %AshStorage.Service.Context{} = ctx) do
+      full_key = prefixed_key(key, ctx)
+
+      with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900) do
+        case Req.head(url, headers: base_headers(ctx)) do
+          {:ok, %{status: 200, headers: headers}} ->
+            # Azure ETag is opaque (timestamp/version), not the body MD5 — leave it nil.
+            {:ok,
+             %{
+               etag: nil,
+               content_md5: header(headers, ["content-md5"]),
+               byte_size: parse_int(header(headers, ["content-length"]))
+             }}
+
+          {:ok, %{status: 404}} ->
+            {:error, :not_found}
+
+          {:ok, %{status: status, body: body}} ->
+            {:error, {status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
         end
       end
     end
@@ -227,6 +262,32 @@ if Code.ensure_loaded?(Req) do
 
     defp materialize_body(%File.Stream{path: path}), do: File.read!(path)
     defp materialize_body(data) when is_binary(data) or is_list(data), do: data
+
+    defp verify_md5(_data, nil), do: :ok
+
+    defp verify_md5(data, expected) do
+      if Base.encode64(:erlang.md5(data)) == expected,
+        do: :ok,
+        else: {:error, :checksum_mismatch}
+    end
+
+    defp header(headers, names) do
+      Enum.find_value(names, fn name ->
+        case Map.get(headers, name) do
+          [value | _] -> value
+          _ -> nil
+        end
+      end)
+    end
+
+    defp parse_int(nil), do: nil
+
+    defp parse_int(value) do
+      case Integer.parse(value) do
+        {n, _} -> n
+        :error -> nil
+      end
+    end
 
     defp signed_blob_url(key, %AshStorage.Service.Context{} = ctx, opts) do
       base_url = blob_url(key, ctx)
