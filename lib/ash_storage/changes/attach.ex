@@ -53,12 +53,7 @@ defmodule AshStorage.Changes.Attach do
               AshOban.run_trigger(blob, :run_pending_analyzers)
             end
 
-            for variant_def <- attachment_def.variants || [],
-                variant_def.generate == :oban do
-              AshOban.run_trigger(blob, :run_pending_variant,
-                action_arguments: %{variant_name: to_string(variant_def.name)}
-              )
-            end
+            AshStorage.VariantScheduler.schedule_initial(blob, attachment_def)
 
             record =
               record
@@ -476,7 +471,9 @@ defmodule AshStorage.Changes.Attach do
              "module" => to_string(mod),
              "opts" => string_opts,
              "resource" => to_string(resource),
-             "attachment" => to_string(attachment_def.name)
+             "attachment" => to_string(attachment_def.name),
+             "group" => variant_def.group && to_string(variant_def.group),
+             "order" => variant_def.order || 0
            }}
         end)
 
