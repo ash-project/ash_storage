@@ -54,6 +54,16 @@ defmodule AshStorage.VariantObanTest do
       assert pending["oban_upper"]["module"] == to_string(AshStorage.Test.UppercaseVariant)
       assert pending["oban_reverse"]["status"] == "pending"
       assert pending["oban_reverse"]["module"] == to_string(AshStorage.Test.ReverseVariant)
+
+      # Group + order metadata is persisted alongside module/opts so the worker
+      # and scheduler can rehydrate units without walking the DSL at runtime.
+      assert pending["oban_upper"]["group"] == nil
+      assert pending["oban_upper"]["order"] == 0
+      assert pending["oban_grouped_a"]["group"] == "fast"
+      assert pending["oban_grouped_a"]["order"] == 0
+      assert pending["oban_grouped_b"]["group"] == "fast"
+      assert pending["oban_later"]["group"] == nil
+      assert pending["oban_later"]["order"] == 1
     end
 
     test "pending_variants flag is set during attach" do
@@ -67,6 +77,7 @@ defmodule AshStorage.VariantObanTest do
       post = create_post!()
       blob = attach!(post)
 
+      # Solo variants land on the singular per-variant worker.
       assert_enqueued(
         worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
         args: %{
@@ -83,7 +94,23 @@ defmodule AshStorage.VariantObanTest do
         }
       )
 
-      refute_enqueued(worker: AshStorage.Test.PgBlob.RunPendingVariantsWorker)
+      # Grouped variants share one job on the multi-unit dispatcher worker.
+      assert_enqueued(
+        worker: AshStorage.Test.PgBlob.RunPendingVariantsWorker,
+        args: %{
+          "action_arguments" => %{"group" => "fast"},
+          "primary_key" => %{"id" => blob.id}
+        }
+      )
+
+      # Higher-order tiers wait — order=1 units don't show up at attach.
+      refute_enqueued(
+        worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
+        args: %{"action_arguments" => %{"variant_name" => "oban_later"}}
+      )
+
+      # The cron recovery worker also doesn't get scheduled by attach.
+      refute_enqueued(worker: AshStorage.Test.PgBlob.SchedulePendingVariantsWorker)
     end
 
     test "run_pending_variant action generates a single variant blob and marks it complete" do
@@ -109,12 +136,25 @@ defmodule AshStorage.VariantObanTest do
       assert blob.pending_variants == true
     end
 
-    test "running both variants clears the pending_variants flag" do
+    test "running all variants clears the pending_variants flag" do
       post = create_post!()
       blob = attach!(post)
 
-      {:ok, _} = Ash.update(blob, %{variant_name: "oban_upper"}, action: :run_pending_variant)
-      {:ok, _} = Ash.update(blob, %{variant_name: "oban_reverse"}, action: :run_pending_variant)
+      names = [
+        "oban_upper",
+        "oban_reverse",
+        "oban_grouped_a",
+        "oban_grouped_b",
+        "oban_later",
+        "oban_extra_late",
+        "oban_slow_x",
+        "oban_slow_y"
+      ]
+
+      Enum.each(names, fn name ->
+        blob = Ash.get!(PgBlob, blob.id)
+        {:ok, _} = Ash.update(blob, %{variant_name: name}, action: :run_pending_variant)
+      end)
 
       blob = Ash.get!(PgBlob, blob.id)
       assert blob.pending_variants == false
@@ -159,14 +199,13 @@ defmodule AshStorage.VariantObanTest do
       post = create_post!()
       blob = attach!(post)
 
-      # Drain the queue Oban.Testing implicitly inserted at attach so we can
-      # observe only the jobs the fan-out enqueues.
       Oban.Testing.with_testing_mode(:manual, fn ->
         :ok = drop_all_oban_jobs!()
       end)
 
-      {:ok, _} = Ash.update(blob, %{}, action: :run_pending_variants)
+      {:ok, _} = Ash.update(blob, %{}, action: :schedule_pending_variants)
 
+      # Solo order=0 variants enqueue on the singular worker.
       assert_enqueued(
         worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
         args: %{"action_arguments" => %{"variant_name" => "oban_upper"}}
@@ -175,6 +214,18 @@ defmodule AshStorage.VariantObanTest do
       assert_enqueued(
         worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
         args: %{"action_arguments" => %{"variant_name" => "oban_reverse"}}
+      )
+
+      # The order=0 group enqueues on the multi-unit dispatcher.
+      assert_enqueued(
+        worker: AshStorage.Test.PgBlob.RunPendingVariantsWorker,
+        args: %{"action_arguments" => %{"group" => "fast"}}
+      )
+
+      # Higher-order tiers stay queued behind order=0.
+      refute_enqueued(
+        worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
+        args: %{"action_arguments" => %{"variant_name" => "oban_later"}}
       )
     end
 
@@ -188,7 +239,7 @@ defmodule AshStorage.VariantObanTest do
       :ok = drop_all_oban_jobs!()
 
       blob = Ash.get!(PgBlob, blob.id)
-      {:ok, _} = Ash.update(blob, %{}, action: :run_pending_variants)
+      {:ok, _} = Ash.update(blob, %{}, action: :schedule_pending_variants)
 
       refute_enqueued(
         worker: AshStorage.Test.PgBlob.RunPendingVariantWorker,
@@ -225,7 +276,8 @@ defmodule AshStorage.VariantObanTest do
       pending = blob.metadata["__pending_variants__"]
       assert pending["oban_upper"]["status"] == "complete"
       assert pending["oban_reverse"]["status"] == "complete"
-      assert blob.pending_variants == false
+      # The other oban variants are still pending so the flag stays true.
+      assert blob.pending_variants == true
     end
   end
 
