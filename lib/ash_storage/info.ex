@@ -43,12 +43,18 @@ defmodule AshStorage.Info do
         :many -> :has_many_attached
       end
 
-    with :error <- fetch_attachment_config(resource, entity_type, attachment.name, :service),
-         nil <- attachment.service do
-      Spark.Dsl.Extension.fetch_opt(resource, [:storage], :service, true)
-    else
-      {:ok, value} -> {:ok, value}
-      {mod, opts} when is_atom(mod) -> {:ok, {mod, opts}}
+    result =
+      with :error <- fetch_attachment_config(resource, entity_type, attachment.name, :service),
+           nil <- attachment.service do
+        Spark.Dsl.Extension.fetch_opt(resource, [:storage], :service, true)
+      else
+        {:ok, value} -> {:ok, value}
+        {mod, opts} when is_atom(mod) -> {:ok, {mod, opts}}
+      end
+
+    case result do
+      {:ok, tuple} -> {:ok, AshStorage.Service.Mirror.expand_sugar(tuple)}
+      other -> other
     end
   end
 
