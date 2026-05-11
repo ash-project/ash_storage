@@ -116,9 +116,11 @@ defmodule AshStorage.Changes.AttachBlob do
           |> Ash.Changeset.force_change_attribute(:checksum, service_md5)
           |> Ash.update(context_opts)
 
+        _ when is_nil(service_md5) ->
+          {:error, :checksum_unverifiable}
+
         _ ->
-          error = if is_nil(service_md5), do: :checksum_unverifiable, else: :checksum_mismatch
-          {:error, error}
+          {:error, :checksum_mismatch}
       end
     end
   end
