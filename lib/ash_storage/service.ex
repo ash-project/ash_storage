@@ -93,6 +93,25 @@ defmodule AshStorage.Service do
               {:ok, map()} | {:error, term()}
 
   @doc """
+  Read integrity metadata for a stored object without downloading its body.
+
+  Returns `{:ok, info}` with whichever of `:etag`, `:content_md5`, and
+  `:byte_size` the service can provide; values the service cannot determine
+  are `nil`. Used by `AttachBlob` to confirm direct uploads before linking.
+
+  Services that don't implement this callback skip auto-confirmation; the
+  framework logs a warning once per such service module so the gap is visible.
+  """
+  @callback head(key(), Context.t()) ::
+              {:ok,
+               %{
+                 etag: String.t() | nil,
+                 content_md5: String.t() | nil,
+                 byte_size: non_neg_integer() | nil
+               }}
+              | {:error, term()}
+
+  @doc """
   Return the fields from the service opts that should be persisted on the blob
   record for later operations (e.g. async purge).
 
@@ -112,5 +131,9 @@ defmodule AshStorage.Service do
   """
   @callback service_opts_fields() :: keyword()
 
-  @optional_callbacks upload_many: 2, delete_many: 2, direct_upload: 2, service_opts_fields: 0
+  @optional_callbacks upload_many: 2,
+                      delete_many: 2,
+                      direct_upload: 2,
+                      service_opts_fields: 0,
+                      head: 2
 end

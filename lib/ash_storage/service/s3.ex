@@ -42,8 +42,13 @@ if Code.ensure_loaded?(ReqS3) do
     @impl true
     def upload(key, data, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
+      # Single-PUT only. Multipart uploads need per-part Content-MD5 and a
+      # different completion check; see documentation/topics/checksum-verification.md.
+      put_opts =
+        [url: "/#{full_key}", body: data]
+        |> maybe_put_content_md5(ctx, data)
 
-      case Req.put(req(ctx), url: "/#{full_key}", body: data) do
+      case Req.put(req(ctx), put_opts) do
         {:ok, %{status: status}} when status in 200..299 -> :ok
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
@@ -54,8 +59,10 @@ if Code.ensure_loaded?(ReqS3) do
     def download(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      case Req.get(req(ctx), url: "/#{full_key}") do
-        {:ok, %{status: 200, body: body}} -> {:ok, body}
+      with {:ok, %{status: 200, body: body}} <- Req.get(req(ctx), url: "/#{full_key}"),
+           :ok <- verify_md5(body, ctx.expected_md5) do
+        {:ok, body}
+      else
         {:ok, %{status: 404}} -> {:error, :not_found}
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
         {:error, reason} -> {:error, reason}
@@ -83,6 +90,32 @@ if Code.ensure_loaded?(ReqS3) do
         {:ok, %{status: 404}} -> {:ok, false}
         {:ok, %{status: status}} -> {:error, {:unexpected_status, status}}
         {:error, reason} -> {:error, reason}
+      end
+    end
+
+    @impl true
+    def head(key, %AshStorage.Service.Context{} = ctx) do
+      full_key = prefixed_key(key, ctx)
+
+      case Req.head(req(ctx), url: "/#{full_key}") do
+        {:ok, %{status: 200, headers: headers}} ->
+          etag = headers |> header(["etag"]) |> unquote_etag()
+
+          {:ok,
+           %{
+             etag: etag,
+             content_md5: etag_to_md5(etag),
+             byte_size: parse_int(header(headers, ["content-length"]))
+           }}
+
+        {:ok, %{status: 404}} ->
+          {:error, :not_found}
+
+        {:ok, %{status: status, body: body}} ->
+          {:error, {status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
 
@@ -213,5 +246,55 @@ if Code.ensure_loaded?(ReqS3) do
 
     defp maybe_put(keyword, _key, nil), do: keyword
     defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
+
+    # Only set Content-MD5 when the body is an in-memory binary or iodata,
+    # since the header must hash the exact bytes that go on the wire.
+    defp maybe_put_content_md5(put_opts, %{expected_md5: md5}, data)
+         when is_binary(md5) and (is_binary(data) or is_list(data)) do
+      Keyword.put(put_opts, :headers, [{"content-md5", md5}])
+    end
+
+    defp maybe_put_content_md5(put_opts, _ctx, _data), do: put_opts
+
+    defp verify_md5(_data, nil), do: :ok
+
+    defp verify_md5(data, expected) do
+      if Base.encode64(:erlang.md5(data)) == expected,
+        do: :ok,
+        else: {:error, :checksum_mismatch}
+    end
+
+    defp header(headers, names) do
+      Enum.find_value(names, fn name ->
+        case Map.get(headers, name) do
+          [value | _] -> value
+          _ -> nil
+        end
+      end)
+    end
+
+    defp unquote_etag(nil), do: nil
+    defp unquote_etag(etag), do: String.trim(etag, "\"")
+
+    # S3 single-PUT ETag is the lowercase 32-hex MD5; multipart ETag has a
+    # `-N` suffix and is NOT the body MD5. Re-encode hex as base64 so the
+    # value is comparable to `:erlang.md5/1 |> Base.encode64/1`.
+    defp etag_to_md5(nil), do: nil
+
+    defp etag_to_md5(etag) do
+      case Base.decode16(etag, case: :lower) do
+        {:ok, raw} when byte_size(raw) == 16 -> Base.encode64(raw)
+        _ -> nil
+      end
+    end
+
+    defp parse_int(nil), do: nil
+
+    defp parse_int(value) do
+      case Integer.parse(value) do
+        {n, _} -> n
+        :error -> nil
+      end
+    end
   end
 end

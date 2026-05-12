@@ -76,6 +76,53 @@ defmodule AshStorage.Service.DiskTest do
     test "generates a URL with the base_url and key", %{ctx: ctx} do
       assert Disk.url("abc/test.txt", ctx) == "http://localhost:4000/storage/abc/test.txt"
     end
+
+    test "appends :original_filename as a path segment", %{root: root} do
+      ctx =
+        Context.new(
+          root: root,
+          base_url: "http://localhost:4000/storage",
+          original_filename: "photo.svg"
+        )
+
+      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123/photo.svg"
+    end
+
+    test "omits filename segment when :original_filename is not set", %{ctx: ctx} do
+      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123"
+    end
+
+    test "encodes slash in :original_filename to prevent path splitting", %{root: root} do
+      ctx =
+        Context.new(
+          root: root,
+          base_url: "http://localhost:4000/storage",
+          original_filename: "icons/arrow.svg"
+        )
+
+      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123/icons%2Farrow.svg"
+    end
+
+    test "signed URL with :original_filename signs over storage key only", %{root: root} do
+      secret = "test-secret-32bytes!!!!!!!!!!!!!!"
+
+      ctx =
+        Context.new(
+          root: root,
+          base_url: "http://localhost:4000/storage",
+          secret: secret,
+          original_filename: "photo.svg"
+        )
+
+      url = Disk.url("abc123", ctx)
+
+      assert url =~ "http://localhost:4000/storage/abc123/photo.svg?"
+      %URI{query: query} = URI.parse(url)
+      params = URI.decode_query(query)
+      expires_at = String.to_integer(params["expires"])
+      expected_token = AshStorage.Token.sign(secret, "abc123", expires_at)
+      assert Plug.Crypto.secure_compare(params["token"], expected_token)
+    end
   end
 
   describe "direct_upload/2" do

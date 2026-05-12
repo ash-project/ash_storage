@@ -87,6 +87,23 @@ defmodule AshStorage.Service.S3IntegrationTest do
     test "download returns not_found for missing key" do
       assert {:error, :not_found} = S3.download(unique_key(), ctx())
     end
+
+    test "accepts upload when ctx expected_md5 matches the body" do
+      key = unique_key()
+      data = "checksum-verified payload"
+      ctx = Context.put_expected_md5(ctx(), Base.encode64(:crypto.hash(:md5, data)))
+
+      assert :ok = S3.upload(key, data, ctx)
+      assert {:ok, ^data} = S3.download(key, ctx())
+    end
+
+    test "rejects upload when ctx expected_md5 doesn't match the body" do
+      key = unique_key()
+      ctx = Context.put_expected_md5(ctx(), Base.encode64(:crypto.hash(:md5, "other")))
+
+      assert {:error, {400, _body}} = S3.upload(key, "actual", ctx)
+      assert {:ok, false} = S3.exists?(key, ctx())
+    end
   end
 
   describe "exists?/2" do

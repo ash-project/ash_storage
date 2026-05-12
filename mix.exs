@@ -65,6 +65,7 @@ defmodule AshStorage.MixProject do
         "documentation/topics/variants.md",
         "documentation/topics/file-arguments.md",
         "documentation/topics/direct-uploads.md",
+        "documentation/topics/checksum-verification.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [

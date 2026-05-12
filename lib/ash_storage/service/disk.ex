@@ -55,8 +55,10 @@ defmodule AshStorage.Service.Disk do
     root = Keyword.fetch!(ctx.service_opts, :root)
     path = Path.join(root, key)
 
-    case File.read(path) do
-      {:ok, data} -> {:ok, data}
+    with {:ok, data} <- File.read(path),
+         :ok <- verify_md5(data, ctx.expected_md5) do
+      {:ok, data}
+    else
       {:error, :enoent} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -83,11 +85,33 @@ defmodule AshStorage.Service.Disk do
     {:ok, File.exists?(path)}
   end
 
+  # sobelow_skip ["Traversal.FileModule"]
+  @impl true
+  def head(key, %AshStorage.Service.Context{} = ctx) do
+    root = Keyword.fetch!(ctx.service_opts, :root)
+    path = Path.join(root, key)
+
+    with {:ok, %File.Stat{size: size}} <- File.stat(path),
+         {:ok, data} <- File.read(path) do
+      {:ok, %{etag: nil, content_md5: Base.encode64(:erlang.md5(data)), byte_size: size}}
+    else
+      {:error, :enoent} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @impl true
   def url(key, %AshStorage.Service.Context{} = ctx) do
     opts = ctx.service_opts
     base_url = Keyword.fetch!(opts, :base_url)
-    plain_url = "#{base_url}/#{key}"
+
+    path =
+      case Keyword.get(opts, :original_filename) do
+        nil -> key
+        filename -> "#{key}/#{URI.encode(filename, &URI.char_unreserved?/1)}"
+      end
+
+    plain_url = "#{base_url}/#{path}"
 
     case Keyword.get(opts, :secret) do
       nil ->
@@ -121,4 +145,12 @@ defmodule AshStorage.Service.Disk do
 
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
+
+  defp verify_md5(_data, nil), do: :ok
+
+  defp verify_md5(data, expected) do
+    if Base.encode64(:erlang.md5(data)) == expected,
+      do: :ok,
+      else: {:error, :checksum_mismatch}
+  end
 end
