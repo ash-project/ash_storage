@@ -75,7 +75,10 @@ defmodule AshStorage.Service.Test do
 
   @impl true
   def download(key, %AshStorage.Service.Context{} = ctx) do
-    do_download(key, ctx.service_opts)
+    with {:ok, data} <- do_download(key, ctx.service_opts),
+         :ok <- verify_md5(data, ctx.expected_md5) do
+      {:ok, data}
+    end
   end
 
   @doc """
@@ -100,6 +103,22 @@ defmodule AshStorage.Service.Test do
   """
   def exists?(key, opts) when is_list(opts) do
     do_exists?(key, opts)
+  end
+
+  @impl true
+  def head(key, %AshStorage.Service.Context{} = ctx) do
+    case do_download(key, ctx.service_opts) do
+      {:ok, data} ->
+        {:ok,
+         %{
+           etag: nil,
+           content_md5: Base.encode64(:erlang.md5(data)),
+           byte_size: byte_size(data)
+         }}
+
+      {:error, _} = error ->
+        error
+    end
   end
 
   @doc """
@@ -174,5 +193,13 @@ defmodule AshStorage.Service.Test do
     if :ets.whereis(table) == :undefined do
       :ets.new(table, [:named_table, :public, :set])
     end
+  end
+
+  defp verify_md5(_data, nil), do: :ok
+
+  defp verify_md5(data, expected) do
+    if Base.encode64(:erlang.md5(data)) == expected,
+      do: :ok,
+      else: {:error, :checksum_mismatch}
   end
 end

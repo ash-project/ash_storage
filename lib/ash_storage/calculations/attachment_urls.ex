@@ -34,7 +34,15 @@ defmodule AshStorage.Calculations.AttachmentUrls do
            []
 
          attachments when is_list(attachments) ->
-           Enum.map(attachments, fn att -> service_mod.url(att.blob.key, ctx) end)
+           Enum.map(attachments, fn att ->
+             url_ctx = %{
+               ctx
+               | service_opts:
+                   Keyword.put(ctx.service_opts, :original_filename, att.blob.filename)
+             }
+
+             service_mod.url(att.blob.key, url_ctx)
+           end)
 
          _other ->
            []

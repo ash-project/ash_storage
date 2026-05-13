@@ -60,6 +60,7 @@ defmodule AshStorage.Changes.AttachBlob do
              {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
              ctx = build_context(service_opts, resource, attachment_def, changeset),
              {:ok, blob} <- fetch_blob(resource, blob_id, context_opts),
+             {:ok, blob} <- verify_blob(blob, service_mod, ctx, context_opts),
              {:ok, _} <-
                maybe_replace_existing(record, attachment_def, service_mod, ctx, context_opts),
              {:ok, attachment} <-
@@ -99,6 +100,44 @@ defmodule AshStorage.Changes.AttachBlob do
       {:error, _} -> {:error, :blob_not_found}
     end
   end
+
+  defp verify_blob(blob, service_mod, ctx, context_opts) do
+    with :ok <- if(function_exported?(service_mod, :head, 2), do: :ok, else: {:ok, blob}),
+         {:ok, info} <- service_mod.head(blob.key, ctx) do
+      service_md5 = service_md5(info)
+
+      case presence(blob.checksum) do
+        ^service_md5 ->
+          {:ok, blob}
+
+        nil ->
+          blob
+          |> Ash.Changeset.for_update(:update_metadata, %{}, context_opts)
+          |> Ash.Changeset.force_change_attribute(:checksum, service_md5)
+          |> Ash.update(context_opts)
+
+        _ when is_nil(service_md5) ->
+          {:error, :checksum_unverifiable}
+
+        _ ->
+          {:error, :checksum_mismatch}
+      end
+    end
+  end
+
+  defp service_md5(%{content_md5: md5}) when is_binary(md5), do: md5
+
+  defp service_md5(%{etag: etag}) when is_binary(etag) do
+    case etag |> String.trim("\"") |> Base.decode16(case: :lower) do
+      {:ok, raw} when byte_size(raw) == 16 -> Base.encode64(raw)
+      _ -> nil
+    end
+  end
+
+  defp service_md5(_), do: nil
+
+  defp presence(value) when value in [nil, ""], do: nil
+  defp presence(value), do: value
 
   defp maybe_replace_existing(
          record,

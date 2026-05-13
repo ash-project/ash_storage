@@ -14,12 +14,17 @@ defmodule AshStorage.Service.Context do
   - `:attachment` - the `%AttachmentDefinition{}` struct, or `nil`
   - `:actor` - the current actor, or `nil`
   - `:tenant` - the current tenant, or `nil`
+  - `:expected_md5` - base64-encoded raw MD5 (16 bytes → 24 chars) of the bytes
+    being uploaded or expected to be downloaded. On `upload/3` it is sent as
+    `Content-MD5` so S3/Azure reject mismatched bodies; on `download/2` it is
+    compared against the hash of the fetched bytes. `nil` skips verification.
   """
   defstruct [
     :resource,
     :attachment,
     :actor,
     :tenant,
+    :expected_md5,
     service_opts: []
   ]
 
@@ -28,6 +33,7 @@ defmodule AshStorage.Service.Context do
           attachment: struct() | nil,
           actor: term(),
           tenant: term(),
+          expected_md5: String.t() | nil,
           service_opts: keyword()
         }
 
@@ -42,5 +48,15 @@ defmodule AshStorage.Service.Context do
       actor: Keyword.get(extras, :actor),
       tenant: Keyword.get(extras, :tenant)
     }
+  end
+
+  @doc """
+  Set or clear the expected MD5 on a context.
+
+  The value must be a base64-encoded raw MD5 — exactly the format that the
+  `Content-MD5` HTTP header expects.
+  """
+  def put_expected_md5(%__MODULE__{} = ctx, md5) when is_binary(md5) or is_nil(md5) do
+    %{ctx | expected_md5: md5}
   end
 end
