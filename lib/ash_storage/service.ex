@@ -43,7 +43,15 @@ defmodule AshStorage.Service do
   @doc """
   Download a file from the storage service.
 
-  Returns the file contents as binary data.
+  Returns the file contents as raw bytes, regardless of the stored object's
+  `content-type`. Callers writing the result to disk or piping it to a client
+  get back the exact bytes that were uploaded.
+
+  Services built on `Req` (S3, AzureBlob) disable Req's default `decode_body`
+  step to honor this contract — otherwise a `text/csv` object would come back
+  as parsed rows and `application/json` as an Elixir map. Services may expose
+  a `:decode_body` service option to opt back into content-type decoding when
+  that is what the caller wants.
   """
   @callback download(key(), Context.t()) ::
               {:ok, binary()} | {:error, term()}
