@@ -49,6 +49,9 @@ if Code.ensure_loaded?(Req) do
       (default: `"2020-12-06"`)
     - `:signed_protocol` - SAS protocol restriction. Defaults to `"https"`, or
       `"https,http"` for `http://` endpoints
+    - `:decode_body` - opt back into Req's content-type response decoding on
+      `download/2`. Defaults to `false`; see the `AshStorage.Service`
+      `download/2` callback docs for the raw-bytes contract.
 
     ## Azure setup
 
@@ -109,7 +112,8 @@ if Code.ensure_loaded?(Req) do
         expires_in: [type: :integer],
         direct_upload_expires_in: [type: :integer],
         service_version: [type: :string],
-        signed_protocol: [type: :string]
+        signed_protocol: [type: :string],
+        decode_body: [type: :boolean]
       ]
     end
 
@@ -148,8 +152,11 @@ if Code.ensure_loaded?(Req) do
     def download(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
+      decode_body? = Keyword.get(ctx.service_opts, :decode_body, false)
+
       with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900),
-           {:ok, %{status: 200, body: body}} <- Req.get(url, headers: base_headers(ctx)),
+           {:ok, %{status: 200, body: body}} <-
+             Req.get(url, headers: base_headers(ctx), decode_body: decode_body?),
            :ok <- verify_md5(body, ctx.expected_md5) do
         {:ok, body}
       else
