@@ -63,20 +63,6 @@ if Code.ensure_loaded?(ReqS3) do
     def download(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      with {:ok, %{status: 200, body: body}} <- Req.get(req(ctx), url: "/#{full_key}"),
-           :ok <- verify_md5(body, ctx.expected_md5) do
-        {:ok, body}
-      else
-        {:ok, %{status: 404}} -> {:error, :not_found}
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-
-    @impl true
-    def download_with_metadata(key, %AshStorage.Service.Context{} = ctx) do
-      full_key = prefixed_key(key, ctx)
-
       with {:ok, %{status: 200, body: body, headers: headers}} <-
              Req.get(req(ctx), url: "/#{full_key}"),
            :ok <- verify_md5(body, ctx.expected_md5) do

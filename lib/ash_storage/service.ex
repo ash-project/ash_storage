@@ -43,22 +43,12 @@ defmodule AshStorage.Service do
   @doc """
   Download a file from the storage service.
 
-  Returns the file contents as binary data.
+  Returns `{:ok, %{body: binary, content_type: String.t() | nil}}`. The
+  `:content_type` value is whatever the backend has stored for the object
+  (S3/Azure response header, Test ETS column, MIME-inferred for Disk) and is
+  `nil` when none is known.
   """
   @callback download(key(), Context.t()) ::
-              {:ok, binary()} | {:error, term()}
-
-  @doc """
-  Download a file along with the metadata the service knows about it.
-
-  Returns `{:ok, %{body: binary, content_type: String.t() | nil}}`. Prefer
-  this over `download/2` when you need the stored Content-Type and don't
-  want to guess from the opaque storage key.
-
-  Optional; callers should fall back to `download/2` when a service does
-  not implement it.
-  """
-  @callback download_with_metadata(key(), Context.t()) ::
               {:ok, %{body: binary(), content_type: String.t() | nil}}
               | {:error, term()}
 
@@ -149,6 +139,5 @@ defmodule AshStorage.Service do
                       delete_many: 2,
                       direct_upload: 2,
                       service_opts_fields: 0,
-                      head: 2,
-                      download_with_metadata: 2
+                      head: 2
 end

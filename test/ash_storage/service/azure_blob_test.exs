@@ -418,7 +418,7 @@ defmodule AshStorage.Service.AzureBlobTest do
 
       assert :ok = AzureBlob.upload(key, "hello azure", ctx)
       assert {:ok, true} = AzureBlob.exists?(key, ctx)
-      assert {:ok, "hello azure"} = AzureBlob.download(key, ctx)
+      assert {:ok, %{body: "hello azure"}} = AzureBlob.download(key, ctx)
       assert :ok = AzureBlob.delete(key, ctx)
       assert {:ok, false} = AzureBlob.exists?(key, ctx)
       assert {:error, :not_found} = AzureBlob.download(key, ctx)
@@ -455,7 +455,7 @@ defmodule AshStorage.Service.AzureBlobTest do
       assert headers["x-ms-blob-type"] == "BlockBlob"
       assert headers["content-type"] == "image/png"
       assert {:ok, %{status: 201}} = Req.put(url, body: "image data", headers: headers)
-      assert {:ok, "image data"} = AzureBlob.download("direct/photo.png", ctx)
+      assert {:ok, %{body: "image data"}} = AzureBlob.download("direct/photo.png", ctx)
     end
 
     test "sends the configured x-ms-version header on every request", %{

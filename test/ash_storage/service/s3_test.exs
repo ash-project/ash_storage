@@ -83,8 +83,8 @@ defmodule AshStorage.Service.S3Test do
     end
   end
 
-  describe "download_with_metadata/2" do
-    test "returns upstream Content-Type" do
+  describe "download/2" do
+    test "returns body and upstream Content-Type" do
       stub = :"#{__MODULE__}.DownloadMetadata"
 
       Req.Test.stub(stub, fn conn ->
@@ -96,7 +96,7 @@ defmodule AshStorage.Service.S3Test do
       ctx = ctx([], stub)
 
       assert {:ok, %{body: "<svg/>", content_type: "image/svg+xml" <> _}} =
-               S3.download_with_metadata("photo.svg", ctx)
+               S3.download("photo.svg", ctx)
     end
   end
 

@@ -114,13 +114,13 @@ defmodule AshStorage.Service.MirrorTest do
       TestService.upload("file.txt", "primary-bytes", Context.new(name: @primary_table))
       TestService.upload("file.txt", "secondary-bytes", Context.new(name: @secondary_table))
 
-      assert {:ok, "primary-bytes"} = Mirror.download("file.txt", ctx)
+      assert {:ok, %{body: "primary-bytes"}} = Mirror.download("file.txt", ctx)
     end
 
     test "falls through to secondary on :not_found", %{ctx: ctx} do
       TestService.upload("file.txt", "secondary-bytes", Context.new(name: @secondary_table))
 
-      assert {:ok, "secondary-bytes"} = Mirror.download("file.txt", ctx)
+      assert {:ok, %{body: "secondary-bytes"}} = Mirror.download("file.txt", ctx)
     end
 
     test "returns :not_found when no child has the file", %{ctx: ctx} do

@@ -23,9 +23,9 @@ defmodule AshStorage.Service.Disk do
   alongside them. `AshStorage.Plug.DiskServe` derives Content-Type from the
   served URL's filename via `MIME.from_path/1`, so attachments served through
   DiskServe should either use the `key/filename` URL form (set the attachment's
-  `:original_filename` option) or have keys with meaningful extensions. The
-  `download_with_metadata/2` callback uses the same inference for in-process
-  consumers like `AshStorage.Plug.Proxy`.
+  `:original_filename` option) or have keys with meaningful extensions.
+  `download/2` uses the same inference to populate `:content_type` for
+  in-process consumers like `AshStorage.Plug.Proxy`.
   """
 
   @behaviour AshStorage.Service
@@ -67,18 +67,10 @@ defmodule AshStorage.Service.Disk do
 
     with {:ok, data} <- File.read(path),
          :ok <- verify_md5(data, ctx.expected_md5) do
-      {:ok, data}
+      {:ok, %{body: data, content_type: infer_content_type(key)}}
     else
       {:error, :enoent} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  @impl true
-  def download_with_metadata(key, %AshStorage.Service.Context{} = ctx) do
-    with {:ok, data} <- download(key, ctx) do
-      {:ok, %{body: data, content_type: infer_content_type(key)}}
     end
   end
 

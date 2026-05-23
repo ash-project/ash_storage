@@ -12,10 +12,10 @@
   for plumbing the per-upload Content-Type to services. Used to set
   `Content-Type` headers on S3/Azure uploads and to thread per-variant types
   through `AshStorage.VariantGenerator`.
-- Optional `c:AshStorage.Service.download_with_metadata/2` callback returning
-  `%{body, content_type}` so consumers like `AshStorage.Plug.Proxy` can
-  serve files with the upstream Content-Type instead of inferring from the
-  opaque storage key. Implemented for S3, Azure, Disk, Mirror, and Test.
+- `c:AshStorage.Service.download/2` now returns
+  `{:ok, %{body, content_type}}` so consumers like `AshStorage.Plug.Proxy`
+  can serve files with the upstream Content-Type instead of inferring from
+  the opaque storage key. Implemented for S3, Azure, Disk, Mirror, and Test.
 
 ### Fixed
 
@@ -51,3 +51,12 @@
   ETS so tests can assert per-upload Content-Type round-trips. The ETS row
   shape changed from `{key, data}` to `{key, data, content_type}`; the
   service exposes a new `get_content_type/2` helper for assertions.
+
+### Breaking
+
+- The `c:AshStorage.Service.download/2` callback return shape changed from
+  `{:ok, binary}` to `{:ok, %{body: binary, content_type: String.t() | nil}}`.
+  Internal callers go through `AshStorage.Operations.download/1`, which
+  destructures and continues to return `{:ok, binary}` — no change for
+  application code that uses the Operations API. Custom service modules
+  that implement the behavior must update their `download/2` return value.

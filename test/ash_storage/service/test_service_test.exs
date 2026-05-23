@@ -17,12 +17,12 @@ defmodule AshStorage.Service.TestServiceTest do
   describe "upload/3 and download/2" do
     test "stores and retrieves binary data", %{ctx: ctx} do
       assert :ok = TestService.upload("file.txt", "hello", ctx)
-      assert {:ok, "hello"} = TestService.download("file.txt", ctx)
+      assert {:ok, %{body: "hello"}} = TestService.download("file.txt", ctx)
     end
 
     test "stores and retrieves iolist data", %{ctx: ctx} do
       assert :ok = TestService.upload("file.txt", ["hello", " ", "world"], ctx)
-      assert {:ok, "hello world"} = TestService.download("file.txt", ctx)
+      assert {:ok, %{body: "hello world"}} = TestService.download("file.txt", ctx)
     end
 
     test "returns not_found for missing key", %{ctx: ctx} do
@@ -32,7 +32,7 @@ defmodule AshStorage.Service.TestServiceTest do
     test "overwrites existing key", %{ctx: ctx} do
       TestService.upload("key", "first", ctx)
       TestService.upload("key", "second", ctx)
-      assert {:ok, "second"} = TestService.download("key", ctx)
+      assert {:ok, %{body: "second"}} = TestService.download("key", ctx)
     end
   end
 
@@ -114,20 +114,19 @@ defmodule AshStorage.Service.TestServiceTest do
       assert TestService.get_content_type("photo", name: @table) == "image/png"
     end
 
-    test "download_with_metadata returns the stored content_type", %{ctx: ctx} do
+    test "download returns the stored content_type", %{ctx: ctx} do
       ctx = Context.put_content_type(ctx, "image/svg+xml")
       TestService.upload("logo", "<svg/>", ctx)
 
       assert {:ok, %{body: "<svg/>", content_type: "image/svg+xml"}} =
-               TestService.download_with_metadata("logo", ctx)
+               TestService.download("logo", ctx)
     end
 
     test "content_type is nil when nothing was set", %{ctx: ctx} do
       TestService.upload("plain", "data", ctx)
       assert TestService.get_content_type("plain", name: @table) == nil
 
-      assert {:ok, %{content_type: nil}} =
-               TestService.download_with_metadata("plain", ctx)
+      assert {:ok, %{content_type: nil}} = TestService.download("plain", ctx)
     end
   end
 
@@ -149,7 +148,7 @@ defmodule AshStorage.Service.TestServiceTest do
     test "binary data survives round-trip", %{ctx: ctx} do
       content = :crypto.strong_rand_bytes(1024)
       assert :ok = TestService.upload("random", content, ctx)
-      assert {:ok, ^content} = TestService.download("random", ctx)
+      assert {:ok, %{body: ^content}} = TestService.download("random", ctx)
     end
   end
 
@@ -160,7 +159,7 @@ defmodule AshStorage.Service.TestServiceTest do
 
       # Don't call start — should auto-create
       assert :ok = TestService.upload("key", "data", ctx)
-      assert {:ok, "data"} = TestService.download("key", ctx)
+      assert {:ok, %{body: "data"}} = TestService.download("key", ctx)
 
       :ets.delete(table)
     end

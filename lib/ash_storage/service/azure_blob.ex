@@ -154,21 +154,6 @@ if Code.ensure_loaded?(Req) do
       full_key = prefixed_key(key, ctx)
 
       with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900),
-           {:ok, %{status: 200, body: body}} <- Req.get(url, headers: base_headers(ctx)),
-           :ok <- verify_md5(body, ctx.expected_md5) do
-        {:ok, body}
-      else
-        {:ok, %{status: 404}} -> {:error, :not_found}
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-        {:error, reason} -> {:error, reason}
-      end
-    end
-
-    @impl true
-    def download_with_metadata(key, %AshStorage.Service.Context{} = ctx) do
-      full_key = prefixed_key(key, ctx)
-
-      with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900),
            {:ok, %{status: 200, body: body, headers: headers}} <-
              Req.get(url, headers: base_headers(ctx)),
            :ok <- verify_md5(body, ctx.expected_md5) do

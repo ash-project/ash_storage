@@ -211,7 +211,9 @@ defmodule AshStorage.Operations do
       |> build_blob_context(opts)
       |> Context.put_expected_md5(presence(blob.checksum))
 
-    blob.service_name.download(blob.key, ctx)
+    with {:ok, %{body: body}} <- blob.service_name.download(blob.key, ctx) do
+      {:ok, body}
+    end
   end
 
   defp presence(nil), do: nil

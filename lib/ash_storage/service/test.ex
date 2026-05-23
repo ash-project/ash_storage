@@ -91,21 +91,6 @@ defmodule AshStorage.Service.Test do
 
   @impl true
   def download(key, %AshStorage.Service.Context{} = ctx) do
-    with {:ok, data} <- do_download(key, ctx.service_opts),
-         :ok <- verify_md5(data, ctx.expected_md5) do
-      {:ok, data}
-    end
-  end
-
-  @doc """
-  Download a file from the test store. Convenience for tests that takes keyword opts.
-  """
-  def download(key, opts) when is_list(opts) do
-    do_download(key, opts)
-  end
-
-  @impl true
-  def download_with_metadata(key, %AshStorage.Service.Context{} = ctx) do
     table = Keyword.get(ctx.service_opts, :name, @default_table)
     ensure_started!(table)
 
@@ -118,6 +103,15 @@ defmodule AshStorage.Service.Test do
       [] ->
         {:error, :not_found}
     end
+  end
+
+  @doc """
+  Download a file from the test store. Convenience for tests that takes keyword opts.
+
+  Returns `{:ok, binary}` (no metadata) for ergonomic assertions.
+  """
+  def download(key, opts) when is_list(opts) do
+    do_download(key, opts)
   end
 
   @impl true
