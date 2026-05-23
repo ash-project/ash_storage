@@ -160,6 +160,22 @@ defmodule AshStorage.Service.Mirror do
   end
 
   @impl true
+  def download_with_metadata(key, %Context{} = ctx) do
+    try_in_order(children!(ctx), fn child ->
+      child_ctx = build_child_ctx(child, ctx)
+
+      if function_exported?(child.module, :download_with_metadata, 2) do
+        child.module.download_with_metadata(key, child_ctx)
+      else
+        case child.module.download(key, child_ctx) do
+          {:ok, body} -> {:ok, %{body: body, content_type: nil}}
+          {:error, _} = error -> error
+        end
+      end
+    end)
+  end
+
+  @impl true
   def exists?(key, %Context{} = ctx) do
     try_in_order_exists(children!(ctx), & &1.module.exists?(key, build_child_ctx(&1, ctx)))
   end
@@ -215,13 +231,7 @@ defmodule AshStorage.Service.Mirror do
   end
 
   defp build_child_ctx(child, %Context{} = parent) do
-    %Context{
-      service_opts: child.opts,
-      resource: parent.resource,
-      attachment: parent.attachment,
-      actor: parent.actor,
-      tenant: parent.tenant
-    }
+    %{parent | service_opts: child.opts}
   end
 
   defp try_in_order([], _fun), do: {:error, :not_found}

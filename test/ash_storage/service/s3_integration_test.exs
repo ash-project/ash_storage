@@ -71,6 +71,19 @@ defmodule AshStorage.Service.S3IntegrationTest do
       assert {:ok, "hello s3"} = S3.download(key, ctx())
     end
 
+    test "persists Content-Type from ctx.content_type on uploaded object" do
+      key = unique_key()
+
+      ctx =
+        ctx()
+        |> Context.put_content_type("image/svg+xml")
+
+      assert :ok = S3.upload(key, "<svg/>", ctx)
+
+      assert {:ok, %{content_type: "image/svg+xml" <> _}} =
+               S3.download_with_metadata(key, ctx())
+    end
+
     test "round-trips iolist data" do
       key = unique_key()
       assert :ok = S3.upload(key, ["hello", " ", "s3"], ctx())

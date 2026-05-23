@@ -47,6 +47,40 @@ defmodule AshStorage.Service.MirrorTest do
       assert {:ok, %{encryption_key: "primary-key"}} == Mirror.upload("file.txt", "hi", ctx)
     end
 
+    test "forwards expected_md5 and content_type to every child" do
+      defmodule RecordingChild do
+        @behaviour AshStorage.Service
+
+        @impl true
+        def upload(_, _, ctx) do
+          send(self(), {:child_ctx, ctx.expected_md5, ctx.content_type})
+          :ok
+        end
+
+        @impl true
+        def download(_, _), do: {:error, :not_found}
+        @impl true
+        def delete(_, _), do: :ok
+        @impl true
+        def exists?(_, _), do: {:ok, false}
+        @impl true
+        def url(_, _), do: ""
+      end
+
+      services = [{RecordingChild, []}, {RecordingChild, []}]
+      md5 = Base.encode64(:crypto.hash(:md5, "hi"))
+
+      ctx =
+        Context.new(services: services)
+        |> Context.put_expected_md5(md5)
+        |> Context.put_content_type("image/png")
+
+      :ok = Mirror.upload("file.bin", "hi", ctx)
+
+      assert_received {:child_ctx, ^md5, "image/png"}
+      assert_received {:child_ctx, ^md5, "image/png"}
+    end
+
     test "halts and returns error if a child fails" do
       defmodule FailingChild do
         @behaviour AshStorage.Service

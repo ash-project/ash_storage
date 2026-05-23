@@ -43,6 +43,28 @@ defmodule AshStorage.Plug.ProxyTest do
       assert content_type =~ "image/jpeg"
     end
 
+    test "prefers upstream Content-Type over MIME inference on opaque keys" do
+      ctx =
+        AshStorage.Service.Context.new([])
+        |> AshStorage.Service.Context.put_content_type("image/svg+xml")
+
+      AshStorage.Service.Test.upload("opaque-key-abc123", "<svg/>", ctx)
+
+      conn = call("/opaque-key-abc123")
+      assert conn.status == 200
+      [content_type] = Plug.Conn.get_resp_header(conn, "content-type")
+      assert content_type =~ "image/svg+xml"
+    end
+
+    test "falls back to MIME inference when upstream Content-Type is missing" do
+      ctx = AshStorage.Service.Context.new([])
+      AshStorage.Service.Test.upload("photo.png", "data", ctx)
+
+      conn = call("/photo.png")
+      [content_type] = Plug.Conn.get_resp_header(conn, "content-type")
+      assert content_type =~ "image/png"
+    end
+
     test "returns 404 for missing files" do
       conn = call("/nonexistent.txt")
       assert conn.status == 404

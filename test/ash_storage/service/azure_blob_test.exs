@@ -505,6 +505,31 @@ defmodule AshStorage.Service.AzureBlobTest do
       refute Map.has_key?(put_request.headers, "x-ms-blob-content-md5")
     end
 
+    test "prefers ctx.content_type over service_opts[:content_type] on upload", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx =
+        http_context(endpoint_url, content_type: "image/jpeg")
+        |> Context.put_content_type("image/svg+xml")
+
+      :ok = AzureBlob.upload("art/logo.svg", "<svg/>", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      assert put_request.headers["content-type"] == "image/svg+xml"
+    end
+
+    test "falls back to service_opts[:content_type] when ctx.content_type is nil", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx = http_context(endpoint_url, content_type: "image/jpeg")
+      :ok = AzureBlob.upload("photos/cat.jpg", "data", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      assert put_request.headers["content-type"] == "image/jpeg"
+    end
+
     test "surfaces unexpected download statuses as errors", %{endpoint_url: endpoint_url} do
       ctx = http_context(endpoint_url)
       key = "force-status-400/explode.txt"

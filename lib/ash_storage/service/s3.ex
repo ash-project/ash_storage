@@ -45,7 +45,11 @@ if Code.ensure_loaded?(ReqS3) do
       # Single-PUT only. Multipart uploads need per-part Content-MD5 and a
       # different completion check; see documentation/topics/checksum-verification.md.
       put_opts =
-        [url: "/#{full_key}", body: data]
+        [
+          url: "/#{full_key}",
+          body: data,
+          headers: [{"content-type", resolve_content_type(ctx)}]
+        ]
         |> maybe_put_content_md5(ctx, data)
 
       case Req.put(req(ctx), put_opts) do
@@ -62,6 +66,21 @@ if Code.ensure_loaded?(ReqS3) do
       with {:ok, %{status: 200, body: body}} <- Req.get(req(ctx), url: "/#{full_key}"),
            :ok <- verify_md5(body, ctx.expected_md5) do
         {:ok, body}
+      else
+        {:ok, %{status: 404}} -> {:error, :not_found}
+        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    @impl true
+    def download_with_metadata(key, %AshStorage.Service.Context{} = ctx) do
+      full_key = prefixed_key(key, ctx)
+
+      with {:ok, %{status: 200, body: body, headers: headers}} <-
+             Req.get(req(ctx), url: "/#{full_key}"),
+           :ok <- verify_md5(body, ctx.expected_md5) do
+        {:ok, %{body: body, content_type: header(headers, ["content-type"])}}
       else
         {:ok, %{status: 404}} -> {:error, :not_found}
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
@@ -220,11 +239,13 @@ if Code.ensure_loaded?(ReqS3) do
           resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
         )
 
-      Req.new(
+      [
         base_url: "#{endpoint}/#{bucket}",
         aws_sigv4: sigv4_opts,
         retry: :transient
-      )
+      ]
+      |> maybe_put(:plug, Keyword.get(opts, :plug))
+      |> Req.new()
     end
 
     defp endpoint_url(opts) do
@@ -251,10 +272,18 @@ if Code.ensure_loaded?(ReqS3) do
     # since the header must hash the exact bytes that go on the wire.
     defp maybe_put_content_md5(put_opts, %{expected_md5: md5}, data)
          when is_binary(md5) and (is_binary(data) or is_list(data)) do
-      Keyword.put(put_opts, :headers, [{"content-md5", md5}])
+      Keyword.update(put_opts, :headers, [{"content-md5", md5}], fn existing ->
+        [{"content-md5", md5} | existing]
+      end)
     end
 
     defp maybe_put_content_md5(put_opts, _ctx, _data), do: put_opts
+
+    defp resolve_content_type(%AshStorage.Service.Context{} = ctx) do
+      ctx.content_type ||
+        Keyword.get(ctx.service_opts, :content_type) ||
+        "application/octet-stream"
+    end
 
     defp verify_md5(_data, nil), do: :ok
 

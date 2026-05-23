@@ -96,6 +96,41 @@ defmodule AshStorage.Service.TestServiceTest do
     end
   end
 
+  describe "content_type round-trip" do
+    test "stores ctx.content_type alongside the bytes", %{ctx: ctx} do
+      ctx = Context.put_content_type(ctx, "image/svg+xml")
+      TestService.upload("logo", "<svg/>", ctx)
+
+      assert TestService.get_content_type("logo", name: @table) == "image/svg+xml"
+    end
+
+    test "ctx.content_type wins over service_opts[:content_type]" do
+      ctx =
+        Context.new(name: @table, content_type: "image/jpeg")
+        |> Context.put_content_type("image/png")
+
+      TestService.upload("photo", "data", ctx)
+
+      assert TestService.get_content_type("photo", name: @table) == "image/png"
+    end
+
+    test "download_with_metadata returns the stored content_type", %{ctx: ctx} do
+      ctx = Context.put_content_type(ctx, "image/svg+xml")
+      TestService.upload("logo", "<svg/>", ctx)
+
+      assert {:ok, %{body: "<svg/>", content_type: "image/svg+xml"}} =
+               TestService.download_with_metadata("logo", ctx)
+    end
+
+    test "content_type is nil when nothing was set", %{ctx: ctx} do
+      TestService.upload("plain", "data", ctx)
+      assert TestService.get_content_type("plain", name: @table) == nil
+
+      assert {:ok, %{content_type: nil}} =
+               TestService.download_with_metadata("plain", ctx)
+    end
+  end
+
   describe "direct_upload/2" do
     test "generates upload URL and headers", %{ctx: ctx} do
       assert {:ok, %{url: url, headers: headers}} = TestService.direct_upload("my-key", ctx)

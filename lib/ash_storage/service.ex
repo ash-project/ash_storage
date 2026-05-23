@@ -49,6 +49,20 @@ defmodule AshStorage.Service do
               {:ok, binary()} | {:error, term()}
 
   @doc """
+  Download a file along with the metadata the service knows about it.
+
+  Returns `{:ok, %{body: binary, content_type: String.t() | nil}}`. Prefer
+  this over `download/2` when you need the stored Content-Type and don't
+  want to guess from the opaque storage key.
+
+  Optional; callers should fall back to `download/2` when a service does
+  not implement it.
+  """
+  @callback download_with_metadata(key(), Context.t()) ::
+              {:ok, %{body: binary(), content_type: String.t() | nil}}
+              | {:error, term()}
+
+  @doc """
   Delete a file from the storage service.
   """
   @callback delete(key(), Context.t()) :: :ok | {:error, term()}
@@ -135,5 +149,6 @@ defmodule AshStorage.Service do
                       delete_many: 2,
                       direct_upload: 2,
                       service_opts_fields: 0,
-                      head: 2
+                      head: 2,
+                      download_with_metadata: 2
 end

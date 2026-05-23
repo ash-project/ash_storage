@@ -97,7 +97,11 @@ defmodule AshStorage.VariantGenerator do
         attachment: attachment_def
       )
 
-    ctx = Context.put_expected_md5(ctx, checksum)
+    ctx =
+      ctx
+      |> Context.put_expected_md5(checksum)
+      |> Context.put_content_type(variant_content_type)
+
     blob_resource = Info.storage_blob_resource!(resource)
 
     with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
