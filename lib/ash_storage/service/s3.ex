@@ -23,9 +23,10 @@ if Code.ensure_loaded?(ReqS3) do
     - `:secret_access_key` - AWS secret access key (falls back to `AWS_SECRET_ACCESS_KEY` env var)
     - `:endpoint_url` - custom endpoint URL for S3-compatible services (e.g. MinIO, Tigris)
     - `:prefix` - optional key prefix (e.g. `"uploads/"`)
-    - `:decode_body` - opt back into Req's content-type response decoding on
-      `download/2`. Defaults to `false`; see the `AshStorage.Service`
-      `download/2` callback docs for the raw-bytes contract.
+    - `:decode_body` - whether `download/2` runs Req's content-type response
+      decoding (JSON → map, CSV → rows, gzip → unzipped, etc.). Defaults to
+      `true` to match Req's own default; pass `false` when you need the raw
+      uploaded bytes.
     """
 
     @behaviour AshStorage.Service
@@ -63,7 +64,7 @@ if Code.ensure_loaded?(ReqS3) do
     def download(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      decode_body? = Keyword.get(ctx.service_opts, :decode_body, false)
+      decode_body? = Keyword.get(ctx.service_opts, :decode_body, true)
 
       with {:ok, %{status: 200, body: body}} <-
              Req.get(req(ctx), url: "/#{full_key}", decode_body: decode_body?),

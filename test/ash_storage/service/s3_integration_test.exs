@@ -88,22 +88,22 @@ defmodule AshStorage.Service.S3IntegrationTest do
       assert {:error, :not_found} = S3.download(unique_key(), ctx())
     end
 
-    test "round-trips bytes uploaded with a CSV content-type without auto-decoding" do
-      key = unique_key()
-      csv = "Name,Score\nAlice,95\nBob,87\n"
-
-      :ok = raw_put_with_content_type(key, csv, "text/csv")
-      assert {:ok, ^csv} = S3.download(key, ctx())
-    end
-
-    test "decode_body: true opts back into Req's content-type decoding" do
+    test "auto-decodes JSON bodies by default" do
       key = unique_key()
       json = ~s({"name":"Alice","score":95})
 
       :ok = raw_put_with_content_type(key, json, "application/json")
 
       assert {:ok, %{"name" => "Alice", "score" => 95}} =
-               S3.download(key, ctx(decode_body: true))
+               S3.download(key, ctx())
+    end
+
+    test "decode_body: false returns raw bytes for content-typed objects" do
+      key = unique_key()
+      csv = "Name,Score\nAlice,95\nBob,87\n"
+
+      :ok = raw_put_with_content_type(key, csv, "text/csv")
+      assert {:ok, ^csv} = S3.download(key, ctx(decode_body: false))
     end
 
     test "accepts upload when ctx expected_md5 matches the body" do
