@@ -76,6 +76,16 @@ defmodule AshStorage.VariantTest do
       assert is_binary(eager.variant_digest)
       assert String.length(eager.variant_digest) == 16
     end
+
+    test "threads variant content_type to the service on upload" do
+      post = create_post_with_document()
+      blob = post.document.blob
+
+      assert AshStorage.Service.Test.get_content_type(blob.key) == "text/plain"
+
+      eager = Enum.find(blob.variants, &(&1.variant_name == "eager_uppercase"))
+      assert AshStorage.Service.Test.get_content_type(eager.key) == "text/plain"
+    end
   end
 
   describe "on-demand variant generation" do

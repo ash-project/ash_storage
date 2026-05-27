@@ -18,6 +18,10 @@ defmodule AshStorage.Service.Context do
     being uploaded or expected to be downloaded. On `upload/3` it is sent as
     `Content-MD5` so S3/Azure reject mismatched bodies; on `download/2` it is
     compared against the hash of the fetched bytes. `nil` skips verification.
+  - `:content_type` - per-upload MIME type of the bytes being uploaded.
+    Services prefer this over any `:content_type` in `service_opts` (which is
+    a per-attachment DSL default). `nil` falls back to the DSL value, then to
+    `"application/octet-stream"`.
   """
   defstruct [
     :resource,
@@ -25,6 +29,7 @@ defmodule AshStorage.Service.Context do
     :actor,
     :tenant,
     :expected_md5,
+    :content_type,
     service_opts: []
   ]
 
@@ -34,6 +39,7 @@ defmodule AshStorage.Service.Context do
           actor: term(),
           tenant: term(),
           expected_md5: String.t() | nil,
+          content_type: String.t() | nil,
           service_opts: keyword()
         }
 
@@ -58,5 +64,16 @@ defmodule AshStorage.Service.Context do
   """
   def put_expected_md5(%__MODULE__{} = ctx, md5) when is_binary(md5) or is_nil(md5) do
     %{ctx | expected_md5: md5}
+  end
+
+  @doc """
+  Set or clear the per-upload `content_type` on a context.
+
+  Services read this in preference to any `:content_type` in `service_opts`.
+  Pass `nil` to clear it (services fall back to the DSL value or a default).
+  """
+  def put_content_type(%__MODULE__{} = ctx, content_type)
+      when is_binary(content_type) or is_nil(content_type) do
+    %{ctx | content_type: content_type}
   end
 end

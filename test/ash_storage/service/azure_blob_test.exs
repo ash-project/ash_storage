@@ -418,7 +418,7 @@ defmodule AshStorage.Service.AzureBlobTest do
 
       assert :ok = AzureBlob.upload(key, "hello azure", ctx)
       assert {:ok, true} = AzureBlob.exists?(key, ctx)
-      assert {:ok, "hello azure"} = AzureBlob.download(key, ctx)
+      assert {:ok, %{body: "hello azure"}} = AzureBlob.download(key, ctx)
       assert :ok = AzureBlob.delete(key, ctx)
       assert {:ok, false} = AzureBlob.exists?(key, ctx)
       assert {:error, :not_found} = AzureBlob.download(key, ctx)
@@ -455,7 +455,7 @@ defmodule AshStorage.Service.AzureBlobTest do
       assert headers["x-ms-blob-type"] == "BlockBlob"
       assert headers["content-type"] == "image/png"
       assert {:ok, %{status: 201}} = Req.put(url, body: "image data", headers: headers)
-      assert {:ok, "image data"} = AzureBlob.download("direct/photo.png", ctx)
+      assert {:ok, %{body: "image data"}} = AzureBlob.download("direct/photo.png", ctx)
     end
 
     test "sends the configured x-ms-version header on every request", %{
@@ -503,6 +503,31 @@ defmodule AshStorage.Service.AzureBlobTest do
       [put_request] = recorded_requests(server_state)
       refute Map.has_key?(put_request.headers, "content-md5")
       refute Map.has_key?(put_request.headers, "x-ms-blob-content-md5")
+    end
+
+    test "prefers ctx.content_type over service_opts[:content_type] on upload", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx =
+        http_context(endpoint_url, content_type: "image/jpeg")
+        |> Context.put_content_type("image/svg+xml")
+
+      :ok = AzureBlob.upload("art/logo.svg", "<svg/>", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      assert put_request.headers["content-type"] == "image/svg+xml"
+    end
+
+    test "falls back to service_opts[:content_type] when ctx.content_type is nil", %{
+      endpoint_url: endpoint_url,
+      server_state: server_state
+    } do
+      ctx = http_context(endpoint_url, content_type: "image/jpeg")
+      :ok = AzureBlob.upload("photos/cat.jpg", "data", ctx)
+
+      [put_request] = recorded_requests(server_state)
+      assert put_request.headers["content-type"] == "image/jpeg"
     end
 
     test "surfaces unexpected download statuses as errors", %{endpoint_url: endpoint_url} do

@@ -39,7 +39,7 @@ defmodule AshStorage.Service.DiskTest do
   describe "download/2" do
     test "downloads an existing file", %{ctx: ctx, root: root} do
       File.write!(Path.join(root, "test.txt"), "hello")
-      assert {:ok, "hello"} = Disk.download("test.txt", ctx)
+      assert {:ok, %{body: "hello", content_type: "text/plain"}} = Disk.download("test.txt", ctx)
     end
 
     test "returns error for missing file", %{ctx: ctx} do
@@ -151,7 +151,7 @@ defmodule AshStorage.Service.DiskTest do
       key = "round-trip-#{System.unique_integer([:positive])}"
 
       assert :ok = Disk.upload(key, content, ctx)
-      assert {:ok, ^content} = Disk.download(key, ctx)
+      assert {:ok, %{body: ^content}} = Disk.download(key, ctx)
     end
   end
 end

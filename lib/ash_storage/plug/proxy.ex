@@ -54,8 +54,8 @@ defmodule AshStorage.Plug.Proxy do
           ctx = AshStorage.Service.Context.new(opts.service_opts)
 
           case opts.service_mod.download(key, ctx) do
-            {:ok, data} ->
-              content_type = MIME.from_path(key)
+            {:ok, %{body: data, content_type: upstream_ct}} ->
+              content_type = upstream_ct || infer_content_type(key, opts.content_type_fallback)
 
               conn
               |> Plug.Conn.put_resp_content_type(content_type)
@@ -73,6 +73,13 @@ defmodule AshStorage.Plug.Proxy do
         {:error, :forbidden} ->
           conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
       end
+    end
+  end
+
+  defp infer_content_type(key, fallback) do
+    case MIME.from_path(key) do
+      "application/octet-stream" -> fallback
+      other -> other
     end
   end
 

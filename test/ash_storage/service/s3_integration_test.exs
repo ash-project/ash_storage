@@ -68,20 +68,32 @@ defmodule AshStorage.Service.S3IntegrationTest do
     test "round-trips binary data" do
       key = unique_key()
       assert :ok = S3.upload(key, "hello s3", ctx())
-      assert {:ok, "hello s3"} = S3.download(key, ctx())
+      assert {:ok, %{body: "hello s3"}} = S3.download(key, ctx())
+    end
+
+    test "persists Content-Type from ctx.content_type on uploaded object" do
+      key = unique_key()
+
+      ctx =
+        ctx()
+        |> Context.put_content_type("image/svg+xml")
+
+      assert :ok = S3.upload(key, "<svg/>", ctx)
+
+      assert {:ok, %{content_type: "image/svg+xml" <> _}} = S3.download(key, ctx())
     end
 
     test "round-trips iolist data" do
       key = unique_key()
       assert :ok = S3.upload(key, ["hello", " ", "s3"], ctx())
-      assert {:ok, "hello s3"} = S3.download(key, ctx())
+      assert {:ok, %{body: "hello s3"}} = S3.download(key, ctx())
     end
 
     test "round-trips binary data (large)" do
       key = unique_key()
       data = :crypto.strong_rand_bytes(1024 * 100)
       assert :ok = S3.upload(key, data, ctx())
-      assert {:ok, ^data} = S3.download(key, ctx())
+      assert {:ok, %{body: ^data}} = S3.download(key, ctx())
     end
 
     test "download returns not_found for missing key" do
@@ -94,7 +106,7 @@ defmodule AshStorage.Service.S3IntegrationTest do
       ctx = Context.put_expected_md5(ctx(), Base.encode64(:crypto.hash(:md5, data)))
 
       assert :ok = S3.upload(key, data, ctx)
-      assert {:ok, ^data} = S3.download(key, ctx())
+      assert {:ok, %{body: ^data}} = S3.download(key, ctx())
     end
 
     test "rejects upload when ctx expected_md5 doesn't match the body" do
@@ -169,10 +181,10 @@ defmodule AshStorage.Service.S3IntegrationTest do
       prefixed_ctx = ctx(prefix: "uploads/")
 
       assert :ok = S3.upload(key, "prefixed data", prefixed_ctx)
-      assert {:ok, "prefixed data"} = S3.download(key, prefixed_ctx)
+      assert {:ok, %{body: "prefixed data"}} = S3.download(key, prefixed_ctx)
 
       # The actual S3 key should be prefixed
-      assert {:ok, "prefixed data"} =
+      assert {:ok, %{body: "prefixed data"}} =
                S3.download("uploads/#{key}", ctx())
     end
   end
@@ -276,7 +288,7 @@ defmodule AshStorage.Service.S3IntegrationTest do
       assert blob.service_name == AshStorage.Service.S3
 
       # Verify file is actually in S3
-      assert {:ok, "s3 file content"} = S3.download(blob.key, ctx())
+      assert {:ok, %{body: "s3 file content"}} = S3.download(blob.key, ctx())
 
       # Load the attachment via Ash
       post = Ash.load!(post, avatar: :blob)
@@ -349,7 +361,7 @@ defmodule AshStorage.Service.S3IntegrationTest do
         |> Ash.update!()
 
       # Verify file is actually in S3
-      assert {:ok, "direct content"} = S3.download(blob.key, ctx())
+      assert {:ok, %{body: "direct content"}} = S3.download(blob.key, ctx())
 
       # Verify loadable via Ash
       post = Ash.load!(post, avatar: :blob)

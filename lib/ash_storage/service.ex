@@ -43,10 +43,14 @@ defmodule AshStorage.Service do
   @doc """
   Download a file from the storage service.
 
-  Returns the file contents as binary data.
+  Returns `{:ok, %{body: binary, content_type: String.t() | nil}}`. The
+  `:content_type` value is whatever the backend has stored for the object
+  (S3/Azure response header, Test ETS column, MIME-inferred for Disk) and is
+  `nil` when none is known.
   """
   @callback download(key(), Context.t()) ::
-              {:ok, binary()} | {:error, term()}
+              {:ok, %{body: binary(), content_type: String.t() | nil}}
+              | {:error, term()}
 
   @doc """
   Delete a file from the storage service.

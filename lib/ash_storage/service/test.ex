@@ -65,24 +65,50 @@ defmodule AshStorage.Service.Test do
     ensure_started!(table)
 
     :ets.tab2list(table)
-    |> Enum.map(fn {key, _data} -> key end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  @doc """
+  Return the Content-Type stored alongside the bytes for a given key.
+
+  Returns `nil` if the key is missing or was stored without one.
+  """
+  def get_content_type(key, opts \\ []) do
+    table = Keyword.get(opts, :name, @default_table)
+    ensure_started!(table)
+
+    case :ets.lookup(table, key) do
+      [{^key, _data, content_type}] -> content_type
+      _ -> nil
+    end
   end
 
   @impl true
   def upload(key, io, %AshStorage.Service.Context{} = ctx) do
-    do_upload(key, io, ctx.service_opts)
+    content_type = ctx.content_type || Keyword.get(ctx.service_opts, :content_type)
+    do_upload(key, io, content_type, ctx.service_opts)
   end
 
   @impl true
   def download(key, %AshStorage.Service.Context{} = ctx) do
-    with {:ok, data} <- do_download(key, ctx.service_opts),
-         :ok <- verify_md5(data, ctx.expected_md5) do
-      {:ok, data}
+    table = Keyword.get(ctx.service_opts, :name, @default_table)
+    ensure_started!(table)
+
+    case :ets.lookup(table, key) do
+      [{^key, data, content_type}] ->
+        with :ok <- verify_md5(data, ctx.expected_md5) do
+          {:ok, %{body: data, content_type: content_type}}
+        end
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
   @doc """
   Download a file from the test store. Convenience for tests that takes keyword opts.
+
+  Returns `{:ok, binary}` (no metadata) for ergonomic assertions.
   """
   def download(key, opts) when is_list(opts) do
     do_download(key, opts)
@@ -151,7 +177,7 @@ defmodule AshStorage.Service.Test do
 
   # -- Internal helpers --
 
-  defp do_upload(key, io, opts) do
+  defp do_upload(key, io, content_type, opts) do
     table = Keyword.get(opts, :name, @default_table)
     ensure_started!(table)
 
@@ -162,7 +188,7 @@ defmodule AshStorage.Service.Test do
         data when is_list(data) -> IO.iodata_to_binary(data)
       end
 
-    :ets.insert(table, {key, data})
+    :ets.insert(table, {key, data, content_type})
     :ok
   end
 
@@ -171,7 +197,7 @@ defmodule AshStorage.Service.Test do
     ensure_started!(table)
 
     case :ets.lookup(table, key) do
-      [{^key, data}] -> {:ok, data}
+      [{^key, data, _content_type}] -> {:ok, data}
       [] -> {:error, :not_found}
     end
   end

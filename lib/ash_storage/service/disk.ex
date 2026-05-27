@@ -16,6 +16,16 @@ defmodule AshStorage.Service.Disk do
     returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
     plug will verify before serving files.
   - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
+
+  ## Content-Type
+
+  `upload/3` writes raw bytes to disk and does not persist a Content-Type
+  alongside them. `AshStorage.Plug.DiskServe` derives Content-Type from the
+  served URL's filename via `MIME.from_path/1`, so attachments served through
+  DiskServe should either use the `key/filename` URL form (set the attachment's
+  `:original_filename` option) or have keys with meaningful extensions.
+  `download/2` uses the same inference to populate `:content_type` for
+  in-process consumers like `AshStorage.Plug.Proxy`.
   """
 
   @behaviour AshStorage.Service
@@ -57,10 +67,17 @@ defmodule AshStorage.Service.Disk do
 
     with {:ok, data} <- File.read(path),
          :ok <- verify_md5(data, ctx.expected_md5) do
-      {:ok, data}
+      {:ok, %{body: data, content_type: infer_content_type(key)}}
     else
       {:error, :enoent} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp infer_content_type(key) do
+    case MIME.from_path(key) do
+      "application/octet-stream" -> nil
+      other -> other
     end
   end
 
@@ -132,14 +149,15 @@ defmodule AshStorage.Service.Disk do
   def direct_upload(key, %AshStorage.Service.Context{} = ctx) do
     base_url = Keyword.fetch!(ctx.service_opts, :base_url)
 
+    content_type =
+      ctx.content_type ||
+        Keyword.get(ctx.service_opts, :content_type, "application/octet-stream")
+
     {:ok,
      %{
        url: "#{base_url}/disk/#{key}",
        method: :put,
-       headers: %{
-         "content-type" =>
-           Keyword.get(ctx.service_opts, :content_type, "application/octet-stream")
-       }
+       headers: %{"content-type" => content_type}
      }}
   end
 

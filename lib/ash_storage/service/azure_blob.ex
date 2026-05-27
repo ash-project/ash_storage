@@ -81,13 +81,15 @@ if Code.ensure_loaded?(Req) do
 
     ## Per-call Content-Type
 
-    `:content_type` listed below is read from `service_opts` (i.e. set on the
-    storage configuration), not from per-call attach or `prepare_direct_upload/3`
-    options. To pin a specific Content-Type to direct uploads from a single
-    attachment, configure the service for that attachment with `:content_type`
-    set. Browsers performing direct uploads typically set their own
-    `Content-Type` request header, so the SAS-signed override is only needed
-    when you want it pinned server-side.
+    On `upload/3`, the per-upload `ctx.content_type` is preferred (set by
+    `AshStorage.Operations.attach/4` from the caller's `content_type:`
+    argument). If unset, the service falls back to `:content_type` in
+    `service_opts`, which acts as an attachment-wide default.
+
+    For `direct_upload/2`, the same precedence applies, but note that browsers
+    performing direct uploads typically set their own `Content-Type` request
+    header — the SAS-signed override is only needed when you want it pinned
+    server-side.
     """
 
     @behaviour AshStorage.Service
@@ -130,7 +132,10 @@ if Code.ensure_loaded?(Req) do
           ctx
           |> base_headers()
           |> Map.put("x-ms-blob-type", "BlockBlob")
-          |> maybe_put("content-type", Keyword.get(ctx.service_opts, :content_type))
+          |> maybe_put(
+            "content-type",
+            ctx.content_type || Keyword.get(ctx.service_opts, :content_type)
+          )
           |> maybe_put("content-md5", ctx.expected_md5)
           # Persist MD5 as a blob property so future Get/Head responses carry
           # it back, enabling cheap download-side verification.
@@ -149,9 +154,10 @@ if Code.ensure_loaded?(Req) do
       full_key = prefixed_key(key, ctx)
 
       with {:ok, url} <- signed_blob_url(full_key, ctx, permissions: "r", expires_in: 900),
-           {:ok, %{status: 200, body: body}} <- Req.get(url, headers: base_headers(ctx)),
+           {:ok, %{status: 200, body: body, headers: headers}} <-
+             Req.get(url, headers: base_headers(ctx)),
            :ok <- verify_md5(body, ctx.expected_md5) do
-        {:ok, body}
+        {:ok, %{body: body, content_type: header(headers, ["content-type"])}}
       else
         {:ok, %{status: 404}} -> {:error, :not_found}
         {:ok, %{status: status, body: body}} -> {:error, {status, body}}
@@ -252,7 +258,10 @@ if Code.ensure_loaded?(Req) do
              ) do
         headers =
           %{"x-ms-blob-type" => "BlockBlob"}
-          |> maybe_put("content-type", Keyword.get(ctx.service_opts, :content_type))
+          |> maybe_put(
+            "content-type",
+            ctx.content_type || Keyword.get(ctx.service_opts, :content_type)
+          )
 
         {:ok, %{url: url, method: :put, headers: headers}}
       end
