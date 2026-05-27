@@ -142,32 +142,6 @@ defmodule AshStorage.Service.AzureBlobIntegrationTest do
       assert {:error, :not_found} = AzureBlob.download(unique_key(), ctx())
     end
 
-    test "auto-decodes JSON bodies by default" do
-      key = unique_key()
-      json = ~s({"name":"Alice","score":95})
-
-      assert :ok = AzureBlob.upload(key, json, ctx(content_type: "application/json"))
-
-      assert {:ok, %{"name" => "Alice", "score" => 95}} =
-               AzureBlob.download(key, ctx())
-    end
-
-    test "decode_body: false returns raw CSV bytes" do
-      key = unique_key()
-      csv = "Name,Score\nAlice,95\nBob,87\n"
-
-      assert :ok = AzureBlob.upload(key, csv, ctx(content_type: "text/csv"))
-      assert {:ok, ^csv} = AzureBlob.download(key, ctx(decode_body: false))
-    end
-
-    test "decode_body: false returns raw JSON bytes" do
-      key = unique_key()
-      json = ~s({"name":"Alice","score":95})
-
-      assert :ok = AzureBlob.upload(key, json, ctx(content_type: "application/json"))
-      assert {:ok, ^json} = AzureBlob.download(key, ctx(decode_body: false))
-    end
-
     test "accepts upload when ctx expected_md5 matches the body" do
       key = unique_key()
       data = "checksum-verified payload"

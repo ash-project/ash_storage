@@ -88,24 +88,6 @@ defmodule AshStorage.Service.S3IntegrationTest do
       assert {:error, :not_found} = S3.download(unique_key(), ctx())
     end
 
-    test "auto-decodes JSON bodies by default" do
-      key = unique_key()
-      json = ~s({"name":"Alice","score":95})
-
-      :ok = raw_put_with_content_type(key, json, "application/json")
-
-      assert {:ok, %{"name" => "Alice", "score" => 95}} =
-               S3.download(key, ctx())
-    end
-
-    test "decode_body: false returns raw bytes for content-typed objects" do
-      key = unique_key()
-      csv = "Name,Score\nAlice,95\nBob,87\n"
-
-      :ok = raw_put_with_content_type(key, csv, "text/csv")
-      assert {:ok, ^csv} = S3.download(key, ctx(decode_body: false))
-    end
-
     test "accepts upload when ctx expected_md5 matches the body" do
       key = unique_key()
       data = "checksum-verified payload"
@@ -378,24 +360,6 @@ defmodule AshStorage.Service.S3IntegrationTest do
   end
 
   # -- Helpers --
-
-  defp raw_put_with_content_type(key, body, content_type) do
-    url = "#{@service_opts[:endpoint_url]}/#{@bucket}/#{key}"
-
-    {:ok, %{status: status}} =
-      Req.put(url,
-        body: body,
-        headers: %{"content-type" => content_type},
-        aws_sigv4: [
-          service: :s3,
-          region: @service_opts[:region],
-          access_key_id: @service_opts[:access_key_id],
-          secret_access_key: @service_opts[:secret_access_key]
-        ]
-      )
-
-    if status in 200..299, do: :ok, else: {:error, status}
-  end
 
   defp unique_key do
     "test/#{System.unique_integer([:positive])}-#{:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)}"
