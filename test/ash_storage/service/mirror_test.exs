@@ -180,6 +180,34 @@ defmodule AshStorage.Service.MirrorTest do
     end
   end
 
+  describe "context propagation" do
+    test "download propagates expected_md5 to the child (mismatch fails)", %{ctx: ctx} do
+      Mirror.upload("file.txt", "hello", ctx)
+
+      ctx_with_bad_md5 = Context.put_expected_md5(ctx, Base.encode64(:erlang.md5("not-hello")))
+
+      assert {:error, :checksum_mismatch} = Mirror.download("file.txt", ctx_with_bad_md5)
+    end
+
+    test "download succeeds when expected_md5 matches", %{ctx: ctx} do
+      Mirror.upload("file.txt", "hello", ctx)
+
+      ctx_with_good_md5 = Context.put_expected_md5(ctx, Base.encode64(:erlang.md5("hello")))
+
+      assert {:ok, "hello"} = Mirror.download("file.txt", ctx_with_good_md5)
+    end
+
+    test "fall-through to secondary still propagates expected_md5", %{ctx: ctx} do
+      TestService.upload("file.txt", "secondary-bytes", Context.new(name: @secondary_table))
+
+      good = Context.put_expected_md5(ctx, Base.encode64(:erlang.md5("secondary-bytes")))
+      assert {:ok, "secondary-bytes"} = Mirror.download("file.txt", good)
+
+      bad = Context.put_expected_md5(ctx, Base.encode64(:erlang.md5("wrong")))
+      assert {:error, :checksum_mismatch} = Mirror.download("file.txt", bad)
+    end
+  end
+
   describe "missing :services" do
     test "raises a clear error when context has no :services" do
       ctx = Context.new([])

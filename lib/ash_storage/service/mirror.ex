@@ -215,13 +215,7 @@ defmodule AshStorage.Service.Mirror do
   end
 
   defp build_child_ctx(child, %Context{} = parent) do
-    %Context{
-      service_opts: child.opts,
-      resource: parent.resource,
-      attachment: parent.attachment,
-      actor: parent.actor,
-      tenant: parent.tenant
-    }
+    %{parent | service_opts: child.opts}
   end
 
   defp try_in_order([], _fun), do: {:error, :not_found}
