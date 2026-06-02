@@ -334,6 +334,12 @@ defmodule AshStorage.Changes.HandleFileArgument do
   end
 
   defp read_io(%File.Stream{} = stream), do: Enum.into(stream, <<>>, &IO.iodata_to_binary/1)
+
+  # See `AshStorage.Changes.Attach.read_io/1` for the rationale on this
+  # clause and the full input contract.
+  defp read_io(%{__struct__: Plug.Upload, path: path}) when is_binary(path),
+    do: File.read!(path)
+
   defp read_io(data) when is_binary(data), do: data
   defp read_io(data) when is_list(data), do: IO.iodata_to_binary(data)
 

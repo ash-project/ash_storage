@@ -101,3 +101,36 @@ The difference from `HandleFileArgument`:
 | Argument type | `Ash.Type.File` | `:file` |
 
 Use `HandleFileArgument` when you need `write_attributes` or want the tightest integration. Use `AttachFile` for simpler cases.
+
+## Direct uploads with `Operations.attach/4`
+
+When you don't want to wire a file argument into an Ash action — typical in a Phoenix controller that handles the upload imperatively — call `AshStorage.Operations.attach/4` directly. The `io` argument accepts the same shapes as the file-argument path, including `%Plug.Upload{}`:
+
+```elixir
+def upload(conn, %{"id" => post_id, "image" => %Plug.Upload{} = upload}) do
+  {:ok, post} = Ash.get(MyApp.Post, post_id, actor: conn.assigns.current_user)
+
+  {:ok, %{blob: blob}} =
+    AshStorage.Operations.attach(post, :images, upload,
+      filename: upload.filename || "image",
+      content_type: upload.content_type || "application/octet-stream",
+      actor: conn.assigns.current_user
+    )
+
+  json(conn, %{blob_id: blob.id})
+end
+```
+
+The `io` argument can be any of:
+
+| Value | Source on disk? | Notes |
+|---|---|---|
+| `%Plug.Upload{}` | Yes (`upload.path`) | Read for you; pass the struct itself, not `upload.path`. |
+| `%Ash.Type.File{}` | Yes | Same value you'd accept on a file argument. |
+| `%File.Stream{}` | Yes | Collected into memory. |
+| binary | No — in-memory | The *bytes* to store. Not a filesystem path. |
+| iodata list | No — in-memory | Flattened to a binary. |
+
+> **Gotcha:** the binary clause matches **any** binary, including a filesystem path string. If you pass `upload.path` (the path string) instead of `upload` (the struct), `attach/4` will happily upload the literal path as the blob body. Always pass the struct.
+
+The `:filename` and `:content_type` options are forwarded to the configured service via the `Context` (see `AshStorage.Service.Context`) — for example, the bundled S3 service uses `:content_type` to set the `Content-Type` header on the PUT.

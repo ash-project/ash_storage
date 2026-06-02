@@ -289,6 +289,20 @@ defmodule AshStorage.Changes.Attach do
   defp normalize_upload({:error, _} = error), do: error
 
   # -- IO helpers --
+  #
+  # Materialize the caller-supplied `io` value into the raw bytes that will
+  # be uploaded. Accepted shapes:
+  #
+  #   * `%Ash.Type.File{}` — opened and read in binary mode.
+  #   * `%File.Stream{}`   — collected into a single binary.
+  #   * `%Plug.Upload{}`   — read from disk via `File.read!/1`. Without
+  #     this clause the struct's `:path` field (a string) would match
+  #     the generic `is_binary/1` clause below and the *path* would be
+  #     uploaded as the body. See documentation/topics/file-arguments.md
+  #     for usage from Phoenix controllers.
+  #   * binary             — used verbatim as the bytes to store. Note
+  #     that this is the *bytes*, not a filesystem path.
+  #   * iodata list        — flattened into a binary.
 
   defp read_io(%Ash.Type.File{} = file) do
     {:ok, device} = Ash.Type.File.open(file, [:read, :binary])
@@ -298,6 +312,13 @@ defmodule AshStorage.Changes.Attach do
   end
 
   defp read_io(%File.Stream{} = stream), do: Enum.into(stream, <<>>, &IO.iodata_to_binary/1)
+
+  # Matched by `__struct__` atom so this module does not require `:plug`
+  # as a compile-time dependency; `Plug.Upload` is only resolved here as
+  # an atom literal.
+  defp read_io(%{__struct__: Plug.Upload, path: path}) when is_binary(path),
+    do: File.read!(path)
+
   defp read_io(data) when is_binary(data), do: data
   defp read_io(data) when is_list(data), do: IO.iodata_to_binary(data)
 

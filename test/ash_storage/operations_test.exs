@@ -57,6 +57,35 @@ defmodule AshStorage.OperationsTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_test_file.txt"))
     end
 
+    test "accepts %Plug.Upload{} and uploads the file bytes (not the path string)" do
+      # Regression: before the dedicated `read_io/1` clause, the struct's
+      # `:path` was a binary that matched the generic `is_binary/1` clause
+      # and the literal path string was uploaded as the blob body.
+      post = create_post!()
+      path = Path.join(System.tmp_dir!(), "ash_storage_plug_upload_test.bin")
+      contents = "actual file bytes via Plug.Upload"
+      File.write!(path, contents)
+
+      upload = %Plug.Upload{
+        path: path,
+        filename: "via-plug.bin",
+        content_type: "application/octet-stream"
+      }
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :cover_image, upload,
+          filename: upload.filename,
+          content_type: upload.content_type
+        )
+
+      # Bytes stored = file contents, NOT the path string. byte_size is the
+      # most economical proof — a regression would store the ~50-char path.
+      assert blob.byte_size == byte_size(contents)
+      assert {:ok, ^contents} = AshStorage.Service.Test.download(blob.key, [])
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_plug_upload_test.bin"))
+    end
+
     test "replaces existing has_one_attached" do
       post = create_post!()
 
