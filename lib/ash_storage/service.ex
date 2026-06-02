@@ -36,6 +36,12 @@ defmodule AshStorage.Service do
   May return `:ok` or `{:ok, extra_blob_attrs}`. When a map is returned, its entries
   are merged into the blob record on creation. This allows wrapping services (e.g.
   encryption) to store per-file metadata such as encryption keys on the blob.
+
+  The Context carries the upload's `:content_type` and `:filename` when set
+  by the caller of `attach/4`, so services can record them on the underlying
+  object (e.g. the bundled S3 service forwards `:content_type` as the
+  `Content-Type` header on PUT). See `AshStorage.Service.Context` for the
+  full list of fields.
   """
   @callback upload(key(), iodata() | File.Stream.t(), Context.t()) ::
               :ok | {:ok, map()} | {:error, term()}

@@ -51,6 +51,7 @@ if Code.ensure_loaded?(ReqS3) do
       put_opts =
         [url: "/#{full_key}", body: data]
         |> maybe_put_content_md5(ctx, data)
+        |> maybe_put_content_type(ctx)
 
       case Req.put(req(ctx), put_opts) do
         {:ok, %{status: status}} when status in 200..299 -> :ok
@@ -262,6 +263,23 @@ if Code.ensure_loaded?(ReqS3) do
     end
 
     defp maybe_put_content_md5(put_opts, _ctx, _data), do: put_opts
+
+    # Forward the blob's Content-Type so the stored object reports the
+    # right MIME type. Without this S3 records `binary/octet-stream` on
+    # every object (the SigV4 default for PUTs with no `Content-Type`
+    # header), which makes browsers refuse to render the response as the
+    # type the caller intended — most visibly, `<img src>` requests hit
+    # Opaque Response Blocking and fail silently.
+    #
+    # We only set the header when the context actually carries a value,
+    # so callers who never set `:content_type` keep the old behaviour.
+    defp maybe_put_content_type(put_opts, %{content_type: ct})
+         when is_binary(ct) and ct != "" do
+      existing = Keyword.get(put_opts, :headers, [])
+      Keyword.put(put_opts, :headers, [{"content-type", ct} | existing])
+    end
+
+    defp maybe_put_content_type(put_opts, _ctx), do: put_opts
 
     defp verify_md5(_data, nil), do: :ok
 

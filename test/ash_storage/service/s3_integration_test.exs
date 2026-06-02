@@ -122,6 +122,35 @@ defmodule AshStorage.Service.S3IntegrationTest do
       assert {:error, {400, _body}} = S3.upload(key, "actual", ctx)
       assert {:ok, false} = S3.exists?(key, ctx())
     end
+
+    test "records ctx.content_type on the stored object" do
+      # Regression: prior to forwarding Content-Type on PUT, S3-compatible
+      # stores recorded `binary/octet-stream` on every object regardless
+      # of what the caller passed.
+      key = unique_key()
+
+      ctx =
+        ctx()
+        |> Context.put_blob_metadata(content_type: "image/jpeg", filename: "x.jpg")
+
+      assert :ok = S3.upload(key, "fake jpeg bytes", ctx)
+
+      # MinIO answers HEAD with the stored Content-Type. Read it directly
+      # off the wire — `S3.head/2` only surfaces size + checksums.
+      assert head_content_type(key) == "image/jpeg"
+    end
+
+    test "omits Content-Type header when ctx.content_type is nil" do
+      # Strictly additive: a Context with no content_type should produce
+      # the same wire request as before the change. The stored object
+      # falls back to the service default (`application/octet-stream` on
+      # MinIO; `binary/octet-stream` on real AWS S3) — neither is a
+      # caller-supplied value.
+      key = unique_key()
+      assert :ok = S3.upload(key, "no content type", ctx())
+
+      assert head_content_type(key) in ["application/octet-stream", "binary/octet-stream"]
+    end
   end
 
   describe "exists?/2" do
@@ -429,5 +458,22 @@ defmodule AshStorage.Service.S3IntegrationTest do
       {:ok, %{status: status}} when status in [200, 409] -> :ok
       other -> {:error, other}
     end
+  end
+
+  # Issue a SigV4-signed HEAD straight at MinIO and return the
+  # `content-type` response header. `S3.head/2` only surfaces
+  # size + checksums, so we go to the wire when we need the actual MIME.
+  defp head_content_type(key) do
+    {:ok, %{status: 200, headers: headers}} =
+      Req.head("http://localhost:#{@port}/#{@bucket}/#{key}",
+        aws_sigv4: [
+          service: :s3,
+          region: "us-east-1",
+          access_key_id: @service_opts[:access_key_id],
+          secret_access_key: @service_opts[:secret_access_key]
+        ]
+      )
+
+    headers |> Map.get("content-type", []) |> List.first()
   end
 end
