@@ -313,7 +313,7 @@ defmodule AshStorage.Operations do
     resource = record.__struct__
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def),
+         {:ok, attachments} <- find_attachments(record, attachment_def, opts),
          {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
       ctx = build_context(service_opts, resource, attachment_def, opts)
 
@@ -331,11 +331,11 @@ defmodule AshStorage.Operations do
   end
 
   @doc false
-  def mark_attachments_for_purge(record, attachment_name, _opts \\ []) do
+  def mark_attachments_for_purge(record, attachment_name, opts \\ []) do
     resource = record.__struct__
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def) do
+         {:ok, attachments} <- find_attachments(record, attachment_def, opts) do
       Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
         blob = att.blob
 
@@ -428,7 +428,7 @@ defmodule AshStorage.Operations do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def) do
+  defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -455,6 +455,6 @@ defmodule AshStorage.Operations do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read()
+    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
   end
 end

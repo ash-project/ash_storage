@@ -11,8 +11,9 @@ defmodule AshStorage.Changes.Purge do
   def init(opts), do: {:ok, opts}
 
   @impl true
-  def change(changeset, opts, _context) do
+  def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
+    context_opts = Ash.Context.to_opts(context)
 
     Ash.Changeset.after_action(changeset, fn _changeset, record ->
       resource = record.__struct__
@@ -20,12 +21,12 @@ defmodule AshStorage.Changes.Purge do
       all? = Ash.Changeset.get_argument(changeset, :all) || false
 
       with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-           {:ok, attachments} <- find_attachments(record, attachment_def),
+           {:ok, attachments} <- find_attachments(record, attachment_def, context_opts),
            {:ok, to_purge} <- select_for_purge(attachments, attachment_def, blob_id, all?),
            {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
         ctx = build_context(service_opts, resource, attachment_def, changeset)
 
-        case purge_attachments(to_purge, service_mod, ctx) do
+        case purge_attachments(to_purge, service_mod, ctx, context_opts) do
           {:ok, purged} ->
             {:ok, Ash.Resource.put_metadata(record, :purged_attachments, purged)}
 
@@ -65,7 +66,7 @@ defmodule AshStorage.Changes.Purge do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def) do
+  defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -92,16 +93,18 @@ defmodule AshStorage.Changes.Purge do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read()
+    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
   end
 
-  defp purge_attachments(attachments, service_mod, ctx) do
+  defp purge_attachments(attachments, service_mod, ctx, context_opts) do
+    destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
       with :ok <- service_mod.delete(blob.key, ctx),
-           {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
-           {:ok, _} <- Ash.destroy(blob, action: :destroy, return_destroyed?: true) do
+           {:ok, _} <- Ash.destroy(att, destroy_opts),
+           {:ok, _} <- Ash.destroy(blob, destroy_opts) do
         {:cont, {:ok, [att | acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}

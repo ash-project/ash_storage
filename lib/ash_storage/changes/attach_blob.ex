@@ -218,8 +218,7 @@ defmodule AshStorage.Changes.AttachBlob do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.Query.set_tenant(context_opts[:tenant])
-    |> Ash.read()
+    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
   end
 
   defp purge_attachments(attachments, service_mod, ctx, context_opts) do

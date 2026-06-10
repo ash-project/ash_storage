@@ -10,8 +10,9 @@ defmodule AshStorage.Changes.Detach do
   def init(opts), do: {:ok, opts}
 
   @impl true
-  def change(changeset, opts, _context) do
+  def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
+    context_opts = Ash.Context.to_opts(context)
 
     Ash.Changeset.after_action(changeset, fn _changeset, record ->
       resource = record.__struct__
@@ -19,9 +20,9 @@ defmodule AshStorage.Changes.Detach do
       all? = Ash.Changeset.get_argument(changeset, :all) || false
 
       with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-           {:ok, attachments} <- find_attachments(record, attachment_def),
+           {:ok, attachments} <- find_attachments(record, attachment_def, context_opts),
            {:ok, to_detach} <- select_for_detach(attachments, attachment_def, blob_id, all?) do
-        case destroy_attachment_records(to_detach) do
+        case destroy_attachment_records(to_detach, context_opts) do
           {:ok, destroyed} ->
             {:ok, Ash.Resource.put_metadata(record, :detached_attachments, destroyed)}
 
@@ -45,7 +46,7 @@ defmodule AshStorage.Changes.Detach do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def) do
+  defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -72,12 +73,14 @@ defmodule AshStorage.Changes.Detach do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read()
+    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
   end
 
-  defp destroy_attachment_records(attachments) do
+  defp destroy_attachment_records(attachments, context_opts) do
+    destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      case Ash.destroy(att, action: :destroy, return_destroyed?: true) do
+      case Ash.destroy(att, destroy_opts) do
         {:ok, destroyed} -> {:cont, {:ok, [destroyed | acc]}}
         {:error, error} -> {:halt, {:error, error}}
       end

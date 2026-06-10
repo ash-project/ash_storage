@@ -3,10 +3,11 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
   use Ash.Resource.Change
 
   @impl true
-  def change(changeset, _opts, _context) do
+  def change(changeset, _opts, context) do
     if changeset.action.soft? do
       changeset
     else
+      context_opts = Ash.Context.to_opts(context)
       resource = changeset.resource
       async? = async_purge?(resource)
 
@@ -15,7 +16,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
       changeset =
         Ash.Changeset.before_action(changeset, fn changeset ->
           record = changeset.data
-          attachments_by_name = prefetch_attachments(record)
+          attachments_by_name = prefetch_attachments(record, context_opts)
           Ash.Changeset.put_context(changeset, :__ash_storage_attachments__, attachments_by_name)
         end)
 
@@ -48,7 +49,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp prefetch_attachments(record) do
+  defp prefetch_attachments(record, context_opts) do
     resource = record.__struct__
     attachment_defs = AshStorage.Info.attachments(resource)
 
@@ -80,7 +81,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
           case attachment_resource
                |> Ash.Query.filter(^filter)
                |> Ash.Query.load(:blob)
-               |> Ash.read() do
+               |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer])) do
             {:ok, attachments} -> Map.put(acc, attachment_def.name, attachments)
             _ -> acc
           end
