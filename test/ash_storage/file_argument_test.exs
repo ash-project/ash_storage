@@ -38,6 +38,62 @@ defmodule AshStorage.FileArgumentTest do
       post = Ash.load!(post, :cover_image)
       assert post.cover_image == nil
     end
+
+    test "forwards action opts to the nested attach operation" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_actor_opts_test.txt")
+      File.write!(path, "actor opts")
+
+      post =
+        AshStorage.Test.ActorRequiredPost
+        |> Ash.Changeset.for_create(
+          :create_with_image,
+          %{
+            title: "with actor",
+            cover_image: Ash.Type.File.from_path(path)
+          },
+          actor: :authorized
+        )
+        |> Ash.create!()
+
+      post = Ash.load!(post, cover_image: :blob)
+
+      assert {:ok, "actor opts"} = AshStorage.Service.Test.download(post.cover_image.blob.key, [])
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_actor_opts_test.txt"))
+    end
+
+    test "forwards action opts to nested attach operations during bulk create" do
+      path1 = Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_1.txt")
+      path2 = Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_2.txt")
+
+      File.write!(path1, "bulk actor opts 1")
+      File.write!(path2, "bulk actor opts 2")
+
+      result =
+        Ash.bulk_create(
+          [
+            %{title: "bulk 1", cover_image: Ash.Type.File.from_path(path1)},
+            %{title: "bulk 2", cover_image: Ash.Type.File.from_path(path2)}
+          ],
+          AshStorage.Test.ActorRequiredPost,
+          :create_with_image,
+          actor: :authorized,
+          return_records?: true,
+          return_errors?: true
+        )
+
+      assert result.status == :success
+      assert [post1, post2] = Ash.load!(result.records, cover_image: :blob)
+
+      assert {:ok, "bulk actor opts 1"} =
+               AshStorage.Service.Test.download(post1.cover_image.blob.key, [])
+
+      assert {:ok, "bulk actor opts 2"} =
+               AshStorage.Service.Test.download(post2.cover_image.blob.key, [])
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_1.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_2.txt"))
+    end
   end
 
   describe "update with :file argument" do

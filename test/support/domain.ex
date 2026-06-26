@@ -16,6 +16,7 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.IntegerAttachment
     resource AshStorage.Test.ExtraAttrsPost
     resource AshStorage.Test.ChecksumVerifyingPost
+    resource AshStorage.Test.ActorRequiredPost
     resource AshStorage.Test.NoHeadPost
     resource AshStorage.Test.MultipartEtagPost
   end

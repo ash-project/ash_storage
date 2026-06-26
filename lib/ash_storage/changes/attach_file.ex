@@ -32,7 +32,7 @@ defmodule AshStorage.Changes.AttachFile do
   end
 
   @impl true
-  def change(changeset, opts, _context) do
+  def change(changeset, opts, context) do
     argument = opts[:argument]
     attachment = opts[:attachment]
 
@@ -43,11 +43,12 @@ defmodule AshStorage.Changes.AttachFile do
 
         %Ash.Type.File{} = file ->
           {filename, content_type} = extract_file_metadata(file)
+          context_opts = Ash.Context.to_opts(context)
 
-          case AshStorage.Operations.attach(record, attachment, file,
-                 filename: filename,
-                 content_type: content_type
-               ) do
+          attach_opts =
+            Keyword.merge(context_opts, filename: filename, content_type: content_type)
+
+          case AshStorage.Operations.attach(record, attachment, file, attach_opts) do
             {:ok, _} -> {:ok, record}
             {:error, error} -> {:error, error}
           end
@@ -59,9 +60,10 @@ defmodule AshStorage.Changes.AttachFile do
   def batch_change(changesets, _opts, _context), do: changesets
 
   @impl true
-  def after_batch(changesets_and_results, opts, _context) do
+  def after_batch(changesets_and_results, opts, context) do
     argument = opts[:argument]
     attachment = opts[:attachment]
+    context_opts = Ash.Context.to_opts(context)
 
     # Split into items that need attachment and those that don't
     {to_attach, passthrough} =
@@ -76,7 +78,11 @@ defmodule AshStorage.Changes.AttachFile do
       Enum.map(to_attach, fn {{changeset, result}, _idx} ->
         file = Ash.Changeset.get_argument(changeset, argument)
         {filename, content_type} = extract_file_metadata(file)
-        {result, attachment, file, filename: filename, content_type: content_type}
+
+        attach_opts =
+          Keyword.merge(context_opts, filename: filename, content_type: content_type)
+
+        {result, attachment, file, attach_opts}
       end)
 
     # Bulk attach
