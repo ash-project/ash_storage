@@ -92,6 +92,7 @@ defmodule AshStorage.AttachmentResource.Transformers.SetupAttachment do
       :url,
       :string,
       {AshStorage.Calculations.Url, parent_resources: parent_resources},
+      arguments: [%Ash.Resource.Calculation.Argument{name: :service_opts, type: :term}],
       public?: true,
       filterable?: false,
       sortable?: false

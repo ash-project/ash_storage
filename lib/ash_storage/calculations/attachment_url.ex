@@ -19,6 +19,8 @@ defmodule AshStorage.Calculations.AttachmentUrl do
     {:ok, {service_mod, service_opts}} =
       AshStorage.Info.service_for_attachment(resource, attachment_def)
 
+    service_opts = Keyword.merge(service_opts, context.arguments[:service_opts] || [])
+
     ctx =
       AshStorage.Service.Context.new(service_opts,
         resource: resource,

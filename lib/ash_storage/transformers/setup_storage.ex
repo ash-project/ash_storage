@@ -124,6 +124,7 @@ defmodule AshStorage.Transformers.SetupStorage do
           :string,
           {AshStorage.Calculations.AttachmentUrl,
            attachment_name: attachment_def.name, resource: resource},
+          arguments: [%Ash.Resource.Calculation.Argument{name: :service_opts, type: :term}],
           public?: true,
           filterable?: false,
           sortable?: false
@@ -136,6 +137,7 @@ defmodule AshStorage.Transformers.SetupStorage do
           {:array, :string},
           {AshStorage.Calculations.AttachmentUrls,
            attachment_name: attachment_def.name, resource: resource},
+          arguments: [%Ash.Resource.Calculation.Argument{name: :service_opts, type: :term}],
           public?: true,
           filterable?: false,
           sortable?: false
@@ -158,6 +160,7 @@ defmodule AshStorage.Transformers.SetupStorage do
              attachment_name: attachment_def.name,
              variant_name: variant_def.name,
              resource: resource},
+            arguments: [%Ash.Resource.Calculation.Argument{name: :service_opts, type: :term}],
             public?: true,
             filterable?: false,
             sortable?: false
@@ -172,6 +175,7 @@ defmodule AshStorage.Transformers.SetupStorage do
              attachment_name: attachment_def.name,
              variant_name: variant_def.name,
              resource: resource},
+            arguments: [%Ash.Resource.Calculation.Argument{name: :service_opts, type: :term}],
             public?: true,
             filterable?: false,
             sortable?: false

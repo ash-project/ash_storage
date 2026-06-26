@@ -30,6 +30,8 @@ defmodule AshStorage.Calculations.Url do
             {:ok, attachment_def} <- AshStorage.Info.attachment(resource, attachment_name),
             {:ok, {service_mod, service_opts}} <-
               AshStorage.Info.service_for_attachment(resource, attachment_def) do
+         service_opts = Keyword.merge(service_opts, context.arguments[:service_opts] || [])
+
          ctx =
            AshStorage.Service.Context.new(service_opts,
              resource: resource,
