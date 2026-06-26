@@ -31,7 +31,7 @@ defmodule AshStorage.UrlTest do
       assert post.cover_image_url == "http://test.local/storage/#{blob.key}"
     end
 
-    test "passes calculation service opts to the storage service" do
+    test "returns URL with option overrides" do
       post = create_post!()
 
       {:ok, %{blob: blob}} =
@@ -80,7 +80,7 @@ defmodule AshStorage.UrlTest do
       assert Enum.sort(post.documents_urls) == expected
     end
 
-    test "passes calculation service opts for has_many URLs" do
+    test "returns URLs with option overrides" do
       post = create_post!()
 
       {:ok, %{blob: blob}} =
@@ -112,7 +112,7 @@ defmodule AshStorage.UrlTest do
       assert post.cover_image.url == "http://test.local/storage/#{blob.key}"
     end
 
-    test "passes calculation service opts to attachment URL calculations" do
+    test "returns URL with option overrides" do
       post = create_post!()
 
       {:ok, %{blob: blob}} =
@@ -199,7 +199,7 @@ defmodule AshStorage.UrlTest do
 
   if Code.ensure_loaded?(AshStorage.Service.S3) do
     describe "S3 attachment URL calculation" do
-      test "passes runtime endpoint_url to the generated URL calculation" do
+      test "returns URL with custom endpoint_url in options" do
         Application.put_env(:ash_storage, AshStorage.Test.ConfigurablePost,
           storage: [
             service:
