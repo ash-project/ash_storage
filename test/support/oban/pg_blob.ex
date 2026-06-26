@@ -25,14 +25,30 @@ defmodule AshStorage.Test.PgBlob do
         worker_module_name(AshStorage.Test.PgBlob.PurgeBlobWorker)
       end
 
+      trigger :run_pending_variant do
+        action :run_pending_variant
+        read_action :read
+        max_attempts(3)
+        scheduler_module_name(AshStorage.Test.PgBlob.RunPendingVariantScheduler)
+        worker_module_name(AshStorage.Test.PgBlob.RunPendingVariantWorker)
+      end
+
       trigger :run_pending_variants do
         action :run_pending_variants
+        read_action :read
+        max_attempts(3)
+        scheduler_module_name(AshStorage.Test.PgBlob.RunPendingVariantsScheduler)
+        worker_module_name(AshStorage.Test.PgBlob.RunPendingVariantsWorker)
+      end
+
+      trigger :schedule_pending_variants do
+        action :schedule_pending_variants
         read_action :read
         where expr(pending_variants == true)
         scheduler_cron("* * * * *")
         max_attempts(3)
-        scheduler_module_name(AshStorage.Test.PgBlob.RunPendingVariantsScheduler)
-        worker_module_name(AshStorage.Test.PgBlob.RunPendingVariantsWorker)
+        scheduler_module_name(AshStorage.Test.PgBlob.SchedulePendingVariantsScheduler)
+        worker_module_name(AshStorage.Test.PgBlob.SchedulePendingVariantsWorker)
       end
     end
   end

@@ -1,82 +1,58 @@
 defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
   @moduledoc """
-  A change that generates all pending variants for a blob.
+  Multi-unit dispatcher: runs a single variant, every pending member of a
+  named group, or both — group first, then the lone variant — within the
+  same Oban job.
 
-  Used by the `:run_pending_variants` action, typically triggered by AshOban.
-  Iterates through the blob's pending_variants map, finds any with `"status" => "pending"`,
-  and generates each one via `AshStorage.VariantGenerator`.
+  Used by the `:run_pending_variants` action. At least one of the action
+  arguments `:variant_name` or `:group` must be set; both may be set.
+
+  Per-variant work is fully delegated to the `:run_pending_variant` action,
+  which handles generation, atomic completion, and tier advancement. This
+  change only orchestrates which variants get invoked.
   """
   use Ash.Resource.Change
 
+  @pending_key "__pending_variants__"
+
   @impl true
   def change(changeset, _opts, _context) do
-    Ash.Changeset.after_action(changeset, fn _changeset, blob ->
-      pending_variants = blob.metadata["__pending_variants__"] || %{}
+    Ash.Changeset.after_action(changeset, fn changeset, blob ->
+      variant_name = Ash.Changeset.get_argument(changeset, :variant_name)
+      group = Ash.Changeset.get_argument(changeset, :group)
 
-      pending =
-        Enum.filter(pending_variants, fn {_name, info} ->
-          info["status"] == "pending"
-        end)
+      case {variant_name, group} do
+        {nil, nil} ->
+          {:error, :run_pending_variants_requires_variant_name_or_group}
 
-      Enum.reduce_while(pending, {:ok, blob}, fn {variant_name, info}, {:ok, blob} ->
-        # sobelow_skip ["DOS.BinToAtom"]
-        module = String.to_existing_atom(info["module"])
-        opts = deserialize_opts(info["opts"] || %{})
-        resource_module = String.to_existing_atom(info["resource"])
-        attachment_name = String.to_existing_atom(info["attachment"])
+        {variant_name, nil} when is_binary(variant_name) ->
+          Ash.update(blob, %{variant_name: variant_name}, action: :run_pending_variant)
 
-        {:ok, attachment_def} = AshStorage.Info.attachment(resource_module, attachment_name)
+        {nil, group} when is_binary(group) ->
+          run_group(blob, group)
 
-        variant_def = %AshStorage.VariantDefinition{
-          name: String.to_existing_atom(variant_name),
-          module: if(opts == [], do: module, else: {module, opts}),
-          generate: :oban
-        }
-
-        new_status =
-          case AshStorage.VariantGenerator.generate(
-                 blob,
-                 variant_def,
-                 resource_module,
-                 attachment_def
-               ) do
-            {:ok, _variant_blob} -> "complete"
-            {:error, :not_accepted} -> "skipped"
-            {:error, error} -> {:halt_error, error}
+        {variant_name, group} when is_binary(variant_name) and is_binary(group) ->
+          with {:ok, blob} <- run_group(blob, group) do
+            Ash.update(blob, %{variant_name: variant_name}, action: :run_pending_variant)
           end
-
-        case new_status do
-          {:halt_error, error} ->
-            {:halt, {:error, error}}
-
-          status ->
-            updated_variants =
-              put_in(pending_variants, [variant_name, "status"], status)
-
-            still_pending? =
-              Enum.any?(updated_variants, fn {_k, v} -> v["status"] == "pending" end)
-
-            metadata = Map.put(blob.metadata, "__pending_variants__", updated_variants)
-
-            update_params =
-              if still_pending? do
-                %{metadata: metadata}
-              else
-                %{metadata: metadata, pending_variants: false}
-              end
-
-            case Ash.update(blob, update_params, action: :update_metadata) do
-              {:ok, blob} -> {:cont, {:ok, blob}}
-              {:error, error} -> {:halt, {:error, error}}
-            end
-        end
-      end)
+      end
     end)
   end
 
-  defp deserialize_opts(opts_map) when is_map(opts_map) do
-    Enum.map(opts_map, fn {k, v} -> {String.to_existing_atom(k), v} end)
-  end
+  defp run_group(blob, group) do
+    members =
+      blob.metadata
+      |> Kernel.||(%{})
+      |> Map.get(@pending_key, %{})
+      |> Enum.filter(fn {_name, info} ->
+        info["status"] == "pending" and to_string(info["group"] || "") == group
+      end)
 
-  defp deserialize_opts(_), do: []
+    Enum.reduce_while(members, {:ok, blob}, fn {variant_name, _info}, {:ok, blob} ->
+      case Ash.update(blob, %{variant_name: variant_name}, action: :run_pending_variant) do
+        {:ok, blob} -> {:cont, {:ok, blob}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 end
