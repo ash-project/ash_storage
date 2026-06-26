@@ -94,6 +94,18 @@ post.cover_image_thumbnail_url
 #=> "http://localhost:4000/storage/a81bf21e..."
 ```
 
+Variant URL calculations also accept per-load `:service_opts`, merged into the configured storage service options for URL generation only:
+
+```elixir
+post =
+  Ash.load!(post,
+    cover_image_thumbnail_url: %{service_opts: [presigned: true, expires_in: 60]}
+  )
+
+post.cover_image_thumbnail_url
+#=> "https://s3.storage.example/my-bucket/a81bf21e...?X-Amz-Expires=60"
+```
+
 For on-demand variants, the first load triggers generation. If the source blob's content type is not accepted by the variant, the URL returns `nil`.
 
 ## How variant blobs are stored
