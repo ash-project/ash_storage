@@ -331,7 +331,7 @@ end
 
 The expansion happens once at service-resolution time, so the `:mirrors` form works the same way at the resource level, per-attachment (`has_one_attached :avatar, service: {…, mirrors: […]}`), per-attachment for `has_many_attached`, or via app config.
 
-Mirror is configured at runtime via the resource's `storage` DSL or app config; the child services are _not_ persisted on the blob row. Synchronous attach/upload/url/download/delete work normally because the live config is in scope. Async paths that rebuild a context purely from `blob.parsed_service_opts` (e.g. AshOban purge jobs) need to re-resolve the Mirror config from app config before invoking the service — calling Mirror with no `:services` raises a clear error.
+Mirror is configured at runtime via the resource's `storage` DSL or app config; the child services are *not* persisted on the blob row. Synchronous attach/upload/url/download/delete work normally because the live config is in scope. Async paths that rebuild a context purely from `blob.parsed_service_opts` (e.g. AshOban purge jobs) need to re-resolve the Mirror config from app config before invoking the service — calling Mirror with no `:services` raises a clear error.
 
 ### Live service integration tests
 
@@ -371,41 +371,41 @@ These are the Elixir libraries we're evaluating for each roadmap feature. All wo
 
 #### Image processing (for variants)
 
-| Library                                                                         | Approach              | Notes                                                                                                                                                           |
-| ------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`image`](https://hex.pm/packages/image) + [`vix`](https://hex.pm/packages/vix) | libvips NIFs          | **Recommended.** 2-3x faster than ImageMagick, ~5x less memory. Ships pre-built binaries for macOS/Linux. Supports JPEG, PNG, WebP, TIFF, SVG, HEIF, GIF, AVIF. |
-| [`mogrify`](https://hex.pm/packages/mogrify)                                    | ImageMagick shell-out | Legacy option. Well-known but ImageMagick has a much larger CVE surface than libvips.                                                                           |
+| Library | Approach | Notes |
+|---|---|---|
+| [`image`](https://hex.pm/packages/image) + [`vix`](https://hex.pm/packages/vix) | libvips NIFs | **Recommended.** 2-3x faster than ImageMagick, ~5x less memory. Ships pre-built binaries for macOS/Linux. Supports JPEG, PNG, WebP, TIFF, SVG, HEIF, GIF, AVIF. |
+| [`mogrify`](https://hex.pm/packages/mogrify) | ImageMagick shell-out | Legacy option. Well-known but ImageMagick has a much larger CVE surface than libvips. |
 
 #### Image metadata extraction (for analyzers)
 
-| Library                                                  | Approach    | Notes                                                                                                                                                      |
-| -------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Library | Approach | Notes |
+|---|---|---|
 | [`ex_image_info`](https://hex.pm/packages/ex_image_info) | Pure Elixir | **Recommended for lightweight use.** Zero deps. Gets dimensions + detected MIME from binary data. Supports JPEG, PNG, GIF, BMP, TIFF, WebP, PSD, SVG, ICO. |
-| [`exexif`](https://hex.pm/packages/exexif)               | Pure Elixir | EXIF/TIFF metadata from JPEGs (camera info, GPS, exposure).                                                                                                |
-| [`image`](https://hex.pm/packages/image)                 | libvips     | Also extracts dimensions and metadata. Good if already using it for variants.                                                                              |
+| [`exexif`](https://hex.pm/packages/exexif) | Pure Elixir | EXIF/TIFF metadata from JPEGs (camera info, GPS, exposure). |
+| [`image`](https://hex.pm/packages/image) | libvips | Also extracts dimensions and metadata. Good if already using it for variants. |
 
 #### Video/audio metadata and thumbnails (for analyzers + variants)
 
-| Library                                        | Approach             | Notes                                                                                                                                             |
-| ---------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`ffmpex`](https://hex.pm/packages/ffmpex)     | FFmpeg shell-out     | **Recommended.** Wraps ffprobe for metadata (duration, bitrate, codecs, dimensions) and ffmpeg for thumbnail extraction. Stable, well-understood. |
-| [`xav`](https://hex.pm/packages/xav)           | FFmpeg NIFs          | NIF-based, no shell-out. Part of elixir-webrtc org, actively maintained. Tighter integration but heavier dependency.                              |
-| [`thumbnex`](https://hex.pm/packages/thumbnex) | ImageMagick + FFmpeg | Simple API for thumbnails from images, videos, and PDFs. Uses `convert` for PDFs, `ffmpeg` for videos.                                            |
+| Library | Approach | Notes |
+|---|---|---|
+| [`ffmpex`](https://hex.pm/packages/ffmpex) | FFmpeg shell-out | **Recommended.** Wraps ffprobe for metadata (duration, bitrate, codecs, dimensions) and ffmpeg for thumbnail extraction. Stable, well-understood. |
+| [`xav`](https://hex.pm/packages/xav) | FFmpeg NIFs | NIF-based, no shell-out. Part of elixir-webrtc org, actively maintained. Tighter integration but heavier dependency. |
+| [`thumbnex`](https://hex.pm/packages/thumbnex) | ImageMagick + FFmpeg | Simple API for thumbnails from images, videos, and PDFs. Uses `convert` for PDFs, `ffmpeg` for videos. |
 
 #### PDF thumbnails (for variants)
 
-| Library                                                                         | Approach              | Notes                                                                                                                                 |
-| ------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| [`image`](https://hex.pm/packages/image) / [`vix`](https://hex.pm/packages/vix) | libvips + poppler     | Can render PDF pages to images if libvips is compiled with poppler/PDFium support. Pre-built binaries may or may not include poppler. |
-| [`thumbnex`](https://hex.pm/packages/thumbnex)                                  | ImageMagick shell-out | Uses `convert` to render first page. Requires ImageMagick with Ghostscript.                                                           |
+| Library | Approach | Notes |
+|---|---|---|
+| [`image`](https://hex.pm/packages/image) / [`vix`](https://hex.pm/packages/vix) | libvips + poppler | Can render PDF pages to images if libvips is compiled with poppler/PDFium support. Pre-built binaries may or may not include poppler. |
+| [`thumbnex`](https://hex.pm/packages/thumbnex) | ImageMagick shell-out | Uses `convert` to render first page. Requires ImageMagick with Ghostscript. |
 
 #### File type detection / content sniffing (for analyzers)
 
-| Library                                                | Approach     | Notes                                                                                                                                  |
-| ------------------------------------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| [`gen_magic`](https://hex.pm/packages/gen_magic)       | libmagic NIF | Most accurate — uses the same library behind the Unix `file` command. Supervised process with pooling. Requires `libmagic` system dep. |
-| [`ex_marcel`](https://hex.pm/packages/ex_marcel)       | Pure Elixir  | Port of Rails' Marcel gem (used by ActiveStorage). Uses Apache Tika signature data. No system deps.                                    |
-| [`magic_number`](https://hex.pm/packages/magic_number) | Pure Elixir  | Lightweight magic number matching. Older, less actively maintained.                                                                    |
+| Library | Approach | Notes |
+|---|---|---|
+| [`gen_magic`](https://hex.pm/packages/gen_magic) | libmagic NIF | Most accurate — uses the same library behind the Unix `file` command. Supervised process with pooling. Requires `libmagic` system dep. |
+| [`ex_marcel`](https://hex.pm/packages/ex_marcel) | Pure Elixir | Port of Rails' Marcel gem (used by ActiveStorage). Uses Apache Tika signature data. No system deps. |
+| [`magic_number`](https://hex.pm/packages/magic_number) | Pure Elixir | Lightweight magic number matching. Older, less actively maintained. |
 
 ## Documentation
 
