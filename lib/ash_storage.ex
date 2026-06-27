@@ -151,4 +151,95 @@ defmodule AshStorage do
   def generate_key do
     Base.encode16(:crypto.strong_rand_bytes(28), case: :lower)
   end
+
+  @doc """
+  Resolve the storage key for an attachment during upload.
+
+  Using the following priority:
+  1. Use `path` specified on the attachment definition (2-arity function) e.g.
+    has_one_attached :avatar do
+      path fn ctx, changeset ->
+      org_id = changeset.context.org_id
+      "\#{org_id}/\#{AshStorage.generate_key()}"
+    end
+  2. Tenant from the changeset i.e. "\#{tenant_id}/\#{key}"
+  3. Just the randomly generated key
+  (specified :prefix is honored in each of the priorities)
+  """
+  def resolve_key(attachment_def, context, changeset) do
+    case attachment_def.path do
+      nil ->
+        resolve_tenant_key(changeset)
+
+      "" ->
+        resolve_tenant_key(changeset)
+
+      path_fn when is_function(path_fn, 2) ->
+        path_fn.(context, changeset)
+    end
+  end
+
+  @doc """
+  Resolve the storage key for an attachment without a changeset.
+  """
+  def resolve_key(attachment_def, tenant) do
+    case attachment_def.path do
+      nil ->
+        resolve_tenant_key_for_opts(tenant)
+
+      "" ->
+        resolve_tenant_key_for_opts(tenant)
+
+      path_fn when is_function(path_fn, 2) ->
+        resolve_tenant_key_for_opts(tenant)
+    end
+  end
+
+  @doc """
+  Resolve the storage key for an attachment from the source blob's key.
+  """
+  def resolve_variant_key(source_blob_key) do
+    path =
+      String.split(source_blob_key, "/")
+      |> Enum.drop(-1)
+      |> Enum.join("/")
+
+    if byte_size(path) > 0 do
+      "#{path}/#{generate_key()}"
+    else
+      generate_key()
+    end
+  end
+
+  defp resolve_tenant_key(changeset) do
+    case Map.get(changeset, :tenant) do
+      nil ->
+        generate_key()
+
+      "" ->
+        generate_key()
+
+      tenant when is_binary(tenant) ->
+        Path.join([tenant, generate_key()])
+
+      tenant ->
+        Path.join([to_string(tenant), generate_key()])
+    end
+  end
+
+  defp resolve_tenant_key_for_opts(tenant) do
+    case tenant do
+      nil ->
+        generate_key()
+
+      "" ->
+        generate_key()
+
+      tenant when is_binary(tenant) ->
+        Path.join([tenant, generate_key()])
+
+      tenant ->
+        Path.join([to_string(tenant), generate_key()])
+    end
+  end
 end

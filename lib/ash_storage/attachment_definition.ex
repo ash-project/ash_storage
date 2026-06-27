@@ -5,6 +5,7 @@ defmodule AshStorage.AttachmentDefinition do
     :type,
     :service,
     :dependent,
+    :path,
     :sort,
     :__spark_metadata__,
     analyzers: [],
@@ -28,6 +29,12 @@ defmodule AshStorage.AttachmentDefinition do
       doc:
         "What to do with the attachment when the parent record is destroyed. `:purge` deletes the blob and file, `:detach` removes the association, `false` does nothing.",
       default: :purge
+    ],
+    path: [
+      type: {:fun, 2},
+      doc:
+        "Specify a path for the key. Accepts a 2-arity function `fn ctx, changeset -> ...`. When path is not specified, falls back to the tenant if available.",
+      required: false
     ]
   ]
 

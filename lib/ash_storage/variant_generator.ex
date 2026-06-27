@@ -77,7 +77,7 @@ defmodule AshStorage.VariantGenerator do
          service_opts,
          attachment_def
        ) do
-    key = AshStorage.generate_key()
+    key = AshStorage.resolve_variant_key(source_blob.key)
     checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
     byte_size = byte_size(variant_data)
 

@@ -14,6 +14,7 @@ spark_locals_without_parens = [
   has_many_attached: 2,
   has_one_attached: 1,
   has_one_attached: 2,
+  path: 1,
   service: 1,
   sort: 1,
   variant: 2,
