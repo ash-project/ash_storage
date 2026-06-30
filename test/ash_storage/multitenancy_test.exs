@@ -223,8 +223,6 @@ defmodule AshStorage.MultitenancyTest do
           tenant: tenant1
         )
 
-      analyzer_key = to_string(AshStorage.Test.TestAnalyzer)
-
       # Reset cached_line_count and run analyzer again to simulate async behavior
       post
       |> Ash.Changeset.for_update(:update, %{}, tenant: tenant1)
@@ -233,6 +231,7 @@ defmodule AshStorage.MultitenancyTest do
 
       {:ok, blob} = Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer)
 
+      analyzer_key = to_string(AshStorage.Test.TestAnalyzer)
       assert blob.analyzers[analyzer_key]["status"] == "complete"
       assert blob.metadata["line_count"] == 3
 
