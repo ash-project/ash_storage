@@ -22,5 +22,6 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.NestedPathPost
     resource AshStorage.Test.PathAttachment
     resource AshStorage.Test.PathPost
+    resource AshStorage.Test.Tenant
   end
 end

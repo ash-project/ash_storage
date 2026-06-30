@@ -169,10 +169,10 @@ defmodule AshStorage do
   def resolve_key(attachment_def, context, changeset) do
     case attachment_def.path do
       nil ->
-        resolve_tenant_key(changeset)
+        resolve_tenant_key(changeset, context.resource)
 
       "" ->
-        resolve_tenant_key(changeset)
+        resolve_tenant_key(changeset, context.resource)
 
       path_fn when is_function(path_fn, 2) ->
         path_fn.(context, changeset)
@@ -182,16 +182,16 @@ defmodule AshStorage do
   @doc """
   Resolve the storage key for an attachment without a changeset.
   """
-  def resolve_key(attachment_def, tenant) do
+  def resolve_key_with_tenant(attachment_def, tenant, resource) do
     case attachment_def.path do
       nil ->
-        resolve_tenant_key_for_opts(tenant)
+        resolve_tenant_key_for_opts(tenant, resource)
 
       "" ->
-        resolve_tenant_key_for_opts(tenant)
+        resolve_tenant_key_for_opts(tenant, resource)
 
       path_fn when is_function(path_fn, 2) ->
-        resolve_tenant_key_for_opts(tenant)
+        resolve_tenant_key_for_opts(tenant, resource)
     end
   end
 
@@ -211,7 +211,7 @@ defmodule AshStorage do
     end
   end
 
-  defp resolve_tenant_key(changeset) do
+  defp resolve_tenant_key(changeset, resource) do
     case Map.get(changeset, :tenant) do
       nil ->
         generate_key()
@@ -223,11 +223,11 @@ defmodule AshStorage do
         Path.join([tenant, generate_key()])
 
       tenant ->
-        Path.join([to_string(tenant), generate_key()])
+        Path.join([to_string(Ash.ToTenant.to_tenant(tenant, resource)), generate_key()])
     end
   end
 
-  defp resolve_tenant_key_for_opts(tenant) do
+  defp resolve_tenant_key_for_opts(tenant, resource) do
     case tenant do
       nil ->
         generate_key()
@@ -239,7 +239,7 @@ defmodule AshStorage do
         Path.join([tenant, generate_key()])
 
       tenant ->
-        Path.join([to_string(tenant), generate_key()])
+        Path.join([to_string(Ash.ToTenant.to_tenant(tenant, resource)), generate_key()])
     end
   end
 end

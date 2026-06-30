@@ -38,6 +38,23 @@ defmodule AshStorage.PathTest do
       assert String.starts_with?(key, "org-abc")
     end
 
+    test "able to also handle tenant struct" do
+      tenant = Ash.create!(AshStorage.Test.Tenant, %{})
+
+      attachment_def = %AshStorage.AttachmentDefinition{
+        name: :avatar
+      }
+
+      ctx = AshStorage.Service.Context.new([])
+      changeset = Ash.Changeset.for_create(AshStorage.Test.Post, :create, %{title: "test"})
+      changeset = %{changeset | tenant: tenant}
+
+      key = AshStorage.resolve_key(attachment_def, ctx, changeset)
+      tenant_id = Ash.ToTenant.to_tenant(tenant, AshStorage.Test.Post)
+      assert String.starts_with?(key, "#{tenant_id}/")
+      refute key == "#{tenant_id}/"
+    end
+
     test "falls back to a random key when no path is provided and no tenant present" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
       ctx = AshStorage.Service.Context.new([])
@@ -50,19 +67,33 @@ defmodule AshStorage.PathTest do
     end
   end
 
-  describe "resolve_key/2 - no changeset" do
+  describe "resolve_key_with_tenant/3 - no changeset" do
     test "uses tenant as part of the key when path is nil" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
-      key = AshStorage.resolve_key(attachment_def, "org-123")
+
+      key =
+        AshStorage.resolve_key_with_tenant(attachment_def, "org-123", AshStorage.Test.PathPost)
 
       assert String.starts_with?(key, "org-123/")
       refute key == "org-123/"
     end
 
+    test "able to use tenant struct" do
+      tenant = Ash.create!(AshStorage.Test.Tenant, %{})
+      attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
+
+      key =
+        AshStorage.resolve_key_with_tenant(attachment_def, tenant, AshStorage.Test.PathPost)
+
+      tenant_id = Ash.ToTenant.to_tenant(tenant, AshStorage.Test.PathPost)
+      assert String.contains?(key, "#{tenant_id}/")
+      refute key == "#{tenant_id}/"
+    end
+
     test "returns just the key when path is nil and no tenant" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
 
-      key = AshStorage.resolve_key(attachment_def, nil)
+      key = AshStorage.resolve_key_with_tenant(attachment_def, nil, AshStorage.Test.PathPost)
 
       refute String.contains?(key, "/")
       assert byte_size(key) == 56
@@ -71,7 +102,7 @@ defmodule AshStorage.PathTest do
     test "returns just key when tenant is empty string" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
 
-      key = AshStorage.resolve_key(attachment_def, "")
+      key = AshStorage.resolve_key_with_tenant(attachment_def, "", AshStorage.Test.PathPost)
 
       refute String.contains?(key, "/")
       assert byte_size(key) == 56

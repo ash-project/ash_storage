@@ -83,7 +83,9 @@ defmodule AshStorage.Operations do
       checksum = Keyword.get(arg_opts, :checksum, "")
       metadata = Keyword.get(arg_opts, :metadata, %{})
 
-      key = AshStorage.resolve_key(attachment_def, Keyword.get(opts, :tenant))
+      key =
+        AshStorage.resolve_key_with_tenant(attachment_def, Keyword.get(opts, :tenant), resource)
+
       blob_resource = Info.storage_blob_resource!(resource)
 
       with {:ok, blob} <-
