@@ -225,26 +225,12 @@ defmodule AshStorage.MultitenancyTest do
 
       analyzer_key = to_string(AshStorage.Test.TestAnalyzer)
 
-      assert blob.analyzers[analyzer_key]["tenant"] == tenant1
+      post
+      |> Ash.Changeset.for_update(:update, %{}, tenant: tenant1)
+      |> Ash.Changeset.force_change_attribute(:cached_line_count, nil)
+      |> Ash.update!()
 
-      analyzers = %{
-        analyzer_key => %{
-          "status" => "pending",
-          "tenant" => tenant1,
-          "opts" => %{},
-          "write_attributes" => %{"line_count" => "cached_line_count"},
-          "write_target" => %{
-            "resource" => to_string(TenantPost),
-            "id" => post.id,
-            "tenant" => tenant1
-          }
-        }
-      }
-
-      {:ok, blob} =
-        Ash.update(blob, %{analyzers: analyzers}, action: :update_metadata, tenant: tenant1)
-
-      {:ok, blob} = Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer, tenant: tenant1)
+      {:ok, blob} = Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer)
 
       assert blob.analyzers[analyzer_key]["status"] == "complete"
       assert blob.metadata["line_count"] == 3
