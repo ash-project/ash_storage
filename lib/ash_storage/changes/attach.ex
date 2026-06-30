@@ -50,11 +50,11 @@ defmodule AshStorage.Changes.Attach do
                :ok <- run_eager_variants(blob, attachment_def, resource),
                {:ok, blob} <- store_oban_variants(blob, attachment_def, resource) do
             if attach_context[:has_oban_analyzers?] do
-              AshOban.run_trigger(blob, :run_pending_analyzers)
+              AshOban.run_trigger(blob, :run_pending_analyzers, tenant: changeset.tenant)
             end
 
             if has_oban_variants?(attachment_def) do
-              AshOban.run_trigger(blob, :run_pending_variants)
+              AshOban.run_trigger(blob, :run_pending_variants, tenant: changeset.tenant)
             end
 
             record =
@@ -72,6 +72,7 @@ defmodule AshStorage.Changes.Attach do
   end
 
   defp do_attach(record, resource, attachment_name, changeset, context_opts) do
+    context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
     io = Ash.Changeset.get_argument(changeset, :io)
     filename = Ash.Changeset.get_argument(changeset, :filename)
 
@@ -90,7 +91,8 @@ defmodule AshStorage.Changes.Attach do
                content_type: content_type,
                metadata: metadata
              ),
-           {:ok, blob, attrs_to_write} <- run_analyzers(blob, attachment_def, record, io) do
+           {:ok, blob, attrs_to_write} <-
+             run_analyzers(blob, attachment_def, record, io, context_opts) do
         {:ok, attrs_to_write,
          %{
            blob: blob,
@@ -112,7 +114,7 @@ defmodule AshStorage.Changes.Attach do
     end)
   end
 
-  defp run_analyzers(blob, attachment_def, record, io) do
+  defp run_analyzers(blob, attachment_def, record, io, context_opts) do
     analyzer_defs = attachment_def.analyzers || []
 
     if analyzer_defs == [] do
@@ -125,7 +127,9 @@ defmodule AshStorage.Changes.Attach do
         Map.new(normalized, fn {module, _analyze, opts, write_attributes} ->
           string_opts = Map.new(opts, fn {k, v} -> {to_string(k), v} end)
 
-          entry = %{"status" => "pending", "opts" => string_opts}
+          entry =
+            %{"status" => "pending", "opts" => string_opts}
+            |> maybe_put_tenant(context_opts[:tenant])
 
           entry =
             if write_attributes != [] do
@@ -134,10 +138,14 @@ defmodule AshStorage.Changes.Attach do
 
               entry
               |> Map.put("write_attributes", string_wa)
-              |> Map.put("write_target", %{
-                "resource" => to_string(record.__struct__),
-                "id" => to_string(Map.get(record, :id))
-              })
+              |> Map.put(
+                "write_target",
+                %{
+                  "resource" => to_string(record.__struct__),
+                  "id" => to_string(Map.get(record, :id))
+                }
+                |> maybe_put_tenant(context_opts[:tenant])
+              )
             else
               entry
             end
@@ -154,20 +162,24 @@ defmodule AshStorage.Changes.Attach do
         end)
 
       with {:ok, blob} <-
-             Ash.update(blob, update_params, action: :update_metadata) do
+             Ash.update(
+               blob,
+               update_params,
+               Keyword.merge(context_opts, action: :update_metadata)
+             ) do
         eager =
           Enum.filter(normalized, fn {module, analyze, _opts, _wa} ->
             analyze != :oban && module.accept?(content_type)
           end)
 
-        run_eager_analyzers(blob, eager, io)
+        run_eager_analyzers(blob, eager, io, context_opts)
       end
     end
   end
 
-  defp run_eager_analyzers(blob, [], _io), do: {:ok, blob, %{}}
+  defp run_eager_analyzers(blob, [], _io, _context_opts), do: {:ok, blob, %{}}
 
-  defp run_eager_analyzers(blob, eager_analyzers, io) do
+  defp run_eager_analyzers(blob, eager_analyzers, io, context_opts) do
     {:ok, path} = resolve_analyzer_path(io)
 
     try do
@@ -201,7 +213,7 @@ defmodule AshStorage.Changes.Attach do
                  status: status,
                  metadata_to_merge: metadata_to_merge
                },
-               action: :complete_analysis
+               Keyword.merge(context_opts, action: :complete_analysis)
              ) do
           {:ok, blob} -> {:cont, {:ok, blob, Map.merge(acc_writes, new_writes)}}
           {:error, error} -> {:halt, {:error, error}}
@@ -211,6 +223,9 @@ defmodule AshStorage.Changes.Attach do
       maybe_cleanup_tempfile(io, path)
     end
   end
+
+  defp maybe_put_tenant(map, nil), do: map
+  defp maybe_put_tenant(map, tenant), do: Map.put(map, "tenant", tenant)
 
   # -- Service helpers --
 

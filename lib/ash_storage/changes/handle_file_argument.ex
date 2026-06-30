@@ -12,9 +12,10 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
   # sobelow_skip ["DOS.BinToAtom", "Traversal.FileModule"]
   @impl true
-  def change(changeset, opts, _context) do
+  def change(changeset, opts, context) do
     argument_name = opts[:argument]
     attachment_name = opts[:attachment]
+    context_opts = Ash.Context.to_opts(context)
 
     file = Ash.Changeset.get_argument(changeset, argument_name)
 
@@ -24,8 +25,9 @@ defmodule AshStorage.Changes.HandleFileArgument do
       changeset
       |> Ash.Changeset.before_action(fn changeset ->
         resource = changeset.resource
+        context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
 
-        case upload_blob(resource, attachment_name, file, changeset) do
+        case upload_blob(resource, attachment_name, file, changeset, context_opts) do
           {:ok, attrs_to_write, context} ->
             changeset
             |> Ash.Changeset.force_change_attributes(attrs_to_write)
@@ -43,13 +45,15 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
         case changeset.context[context_key] do
           %{blob: blob, attachment_def: attachment_def} = context ->
+            context_opts = Keyword.put(context_opts, :tenant, changeset.tenant)
+
             # On update, replace existing attachment; on create, skip
             with {:ok, _} <- maybe_replace_on_update(changeset, record, attachment_def, context),
                  {:ok, attachment} <- create_attachment(record, attachment_def, blob) do
               # Now that we have the record ID, update write_target for oban analyzers
               if context[:has_oban_analyzers?] do
-                update_oban_write_targets(blob, record)
-                AshOban.run_trigger(blob, :run_pending_analyzers)
+                update_oban_write_targets(blob, record, context_opts)
+                AshOban.run_trigger(blob, :run_pending_analyzers, tenant: changeset.tenant)
               end
 
               record =
@@ -75,7 +79,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     maybe_replace_existing(record, attachment_def, context[:service_mod], context[:ctx])
   end
 
-  defp upload_blob(resource, attachment_name, file, changeset) do
+  defp upload_blob(resource, attachment_name, file, changeset, context_opts) do
     {filename, content_type} = extract_file_metadata(file)
 
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
@@ -88,7 +92,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                content_type: content_type
              ),
            {:ok, blob, attrs_to_write} <-
-             run_analyzers(blob, attachment_def, changeset.data, file) do
+             run_analyzers(blob, attachment_def, changeset.data, file, context_opts) do
         {:ok, attrs_to_write,
          %{
            blob: blob,
@@ -102,7 +106,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   end
 
   # After create, we have the real record ID — update write_target in blob's analyzers map
-  defp update_oban_write_targets(blob, record) do
+  defp update_oban_write_targets(blob, record, context_opts) do
     analyzers = blob.analyzers || %{}
 
     has_write_targets? =
@@ -114,17 +118,26 @@ defmodule AshStorage.Changes.HandleFileArgument do
           case entry do
             %{"write_target" => _} ->
               {key,
-               Map.put(entry, "write_target", %{
-                 "resource" => to_string(record.__struct__),
-                 "id" => to_string(Map.get(record, :id))
-               })}
+               Map.put(
+                 entry,
+                 "write_target",
+                 %{
+                   "resource" => to_string(record.__struct__),
+                   "id" => to_string(Map.get(record, :id))
+                 }
+                 |> maybe_put_tenant(context_opts[:tenant])
+               )}
 
             _ ->
               {key, entry}
           end
         end)
 
-      Ash.update(blob, %{analyzers: updated}, action: :update_metadata)
+      Ash.update(
+        blob,
+        %{analyzers: updated},
+        Keyword.merge(context_opts, action: :update_metadata)
+      )
     end
   end
 
@@ -164,7 +177,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     Enum.any?(attachment_def.analyzers || [], fn defn -> defn.analyze == :oban end)
   end
 
-  defp run_analyzers(blob, attachment_def, record, io) do
+  defp run_analyzers(blob, attachment_def, record, io, context_opts) do
     analyzer_defs = attachment_def.analyzers || []
 
     if analyzer_defs == [] do
@@ -177,7 +190,9 @@ defmodule AshStorage.Changes.HandleFileArgument do
         Map.new(normalized, fn {module, _analyze, opts, write_attributes} ->
           string_opts = Map.new(opts, fn {k, v} -> {to_string(k), v} end)
 
-          entry = %{"status" => "pending", "opts" => string_opts}
+          entry =
+            %{"status" => "pending", "opts" => string_opts}
+            |> maybe_put_tenant(context_opts[:tenant])
 
           entry =
             if write_attributes != [] do
@@ -186,10 +201,14 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
               entry
               |> Map.put("write_attributes", string_wa)
-              |> Map.put("write_target", %{
-                "resource" => to_string(record.__struct__),
-                "id" => to_string(Map.get(record, :id))
-              })
+              |> Map.put(
+                "write_target",
+                %{
+                  "resource" => to_string(record.__struct__),
+                  "id" => to_string(Map.get(record, :id))
+                }
+                |> maybe_put_tenant(context_opts[:tenant])
+              )
             else
               entry
             end
@@ -198,20 +217,24 @@ defmodule AshStorage.Changes.HandleFileArgument do
         end)
 
       with {:ok, blob} <-
-             Ash.update(blob, %{analyzers: initial_analyzers}, action: :update_metadata) do
+             Ash.update(
+               blob,
+               %{analyzers: initial_analyzers},
+               Keyword.merge(context_opts, action: :update_metadata)
+             ) do
         eager =
           Enum.filter(normalized, fn {module, analyze, _opts, _wa} ->
             analyze != :oban && module.accept?(content_type)
           end)
 
-        run_eager_analyzers(blob, eager, io)
+        run_eager_analyzers(blob, eager, io, context_opts)
       end
     end
   end
 
-  defp run_eager_analyzers(blob, [], _io), do: {:ok, blob, %{}}
+  defp run_eager_analyzers(blob, [], _io, _context_opts), do: {:ok, blob, %{}}
 
-  defp run_eager_analyzers(blob, eager_analyzers, io) do
+  defp run_eager_analyzers(blob, eager_analyzers, io, context_opts) do
     {:ok, path} = resolve_analyzer_path(io)
 
     try do
@@ -245,7 +268,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                  status: status,
                  metadata_to_merge: metadata_to_merge
                },
-               action: :complete_analysis
+               Keyword.merge(context_opts, action: :complete_analysis)
              ) do
           {:ok, blob} -> {:cont, {:ok, blob, Map.merge(acc_writes, new_writes)}}
           {:error, error} -> {:halt, {:error, error}}
@@ -255,6 +278,9 @@ defmodule AshStorage.Changes.HandleFileArgument do
       maybe_cleanup_tempfile(io, path)
     end
   end
+
+  defp maybe_put_tenant(map, nil), do: map
+  defp maybe_put_tenant(map, tenant), do: Map.put(map, "tenant", tenant)
 
   defp resolve_service(resource, attachment_def) do
     case Info.service_for_attachment(resource, attachment_def) do

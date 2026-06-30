@@ -234,6 +234,13 @@ defmodule AshStorage.Operations do
 
     case Map.fetch(blob_analyzers, analyzer_key) do
       {:ok, analyzer_entry} ->
+        tenant = Keyword.get(opts, :tenant) || analyzer_entry["tenant"]
+
+        context_opts =
+          opts
+          |> Keyword.put(:tenant, tenant)
+          |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
+
         analyzer_opts = analyzer_entry["opts"] || %{}
         content_type = blob.content_type || "application/octet-stream"
 
@@ -265,10 +272,14 @@ defmodule AshStorage.Operations do
                          status: status,
                          metadata_to_merge: metadata_to_merge
                        },
-                       action: :complete_analysis
+                       Keyword.merge(context_opts, action: :complete_analysis)
                      ) do
                 if status == "complete" do
-                  maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge)
+                  maybe_apply_oban_write_attributes(
+                    analyzer_entry,
+                    metadata_to_merge,
+                    context_opts
+                  )
                 end
 
                 {:ok, blob}
@@ -281,7 +292,7 @@ defmodule AshStorage.Operations do
           Ash.update(
             blob,
             %{analyzer_key: analyzer_key, status: "skipped", metadata_to_merge: %{}},
-            action: :complete_analysis
+            Keyword.merge(context_opts, action: :complete_analysis)
           )
         end
 
@@ -358,13 +369,19 @@ defmodule AshStorage.Operations do
   # -- Private helpers --
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge) do
+  defp maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge, context_opts) do
     write_attributes = analyzer_entry["write_attributes"]
     write_target = analyzer_entry["write_target"]
 
     if write_attributes && write_target && map_size(write_attributes) > 0 do
       resource = String.to_existing_atom(write_target["resource"])
       record_id = write_target["id"]
+      tenant = context_opts[:tenant] || write_target["tenant"]
+
+      context_opts =
+        context_opts
+        |> Keyword.put(:tenant, tenant)
+        |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
 
       attrs =
         Enum.reduce(write_attributes, %{}, fn {result_key, attr_name}, acc ->
@@ -375,12 +392,12 @@ defmodule AshStorage.Operations do
         end)
 
       if map_size(attrs) > 0 do
-        case Ash.get(resource, record_id) do
+        case Ash.get(resource, record_id, context_opts) do
           {:ok, record} ->
             record
             |> Ash.Changeset.for_update(:update, %{})
             |> Ash.Changeset.force_change_attributes(attrs)
-            |> Ash.update()
+            |> Ash.update(context_opts)
 
           _ ->
             :ok
