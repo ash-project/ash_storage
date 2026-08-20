@@ -228,10 +228,20 @@ if Code.ensure_loaded?(ReqS3) do
           resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
         )
 
+      tls_versions =
+        Keyword.get(opts, :tls_versions, "tlsv1.2")
+        |> String.split(",")
+        |> Enum.reject(&(String.trim(&1) not in ["tlsv1.2", "tlsv1.3"]))
+        |> Enum.map(&String.to_atom(String.trim(&1)))
+
+      transport_opts =
+        [transport_opts: [versions: tls_versions]]
+
       Req.new(
         base_url: "#{endpoint}/#{bucket}",
         aws_sigv4: sigv4_opts,
-        retry: :transient
+        retry: :transient,
+        connect_options: transport_opts
       )
     end
 
