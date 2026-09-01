@@ -36,6 +36,51 @@ defmodule AshStorage.Service.DiskTest do
     end
   end
 
+  describe "path traversal" do
+    test "rejects keys that escape the root on every op", %{ctx: ctx, root: root} do
+      # Plant a sentinel just outside the root that a traversal would try to reach.
+      outside = Path.join(Path.dirname(root), "escaped_secret.txt")
+      File.write!(outside, "TOP SECRET")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      for key <- ["../escaped_secret.txt", "../../etc/passwd", "a/../../escaped_secret.txt",
+                  "/etc/passwd"] do
+        assert {:error, {:unsafe_storage_key, ^key}} = Disk.download(key, ctx)
+        assert {:error, {:unsafe_storage_key, ^key}} = Disk.upload(key, "x", ctx)
+        assert {:error, {:unsafe_storage_key, ^key}} = Disk.delete(key, ctx)
+      end
+
+      # The traversing uploads never escaped the root.
+      assert File.read!(outside) == "TOP SECRET"
+    end
+
+    test "rejects a symlink under root that points outside it", %{ctx: ctx, root: root} do
+      # Lexical traversal is blocked above; this covers the symlink-vs-root gap
+      # that 1-arity Path.safe_relative (containment vs CWD) would have missed.
+      outside = Path.join(Path.dirname(root), "symlink_secret.txt")
+      File.write!(outside, "TOP SECRET")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      File.ln_s!(outside, Path.join(root, "link.txt"))
+
+      assert {:error, {:unsafe_storage_key, "link.txt"}} = Disk.download("link.txt", ctx)
+      assert {:error, {:unsafe_storage_key, "link.txt"}} = Disk.delete("link.txt", ctx)
+      assert File.read!(outside) == "TOP SECRET"
+    end
+  end
+
+  describe "permissions" do
+    test "writes blobs and dirs with owner-only permissions", %{ctx: ctx, root: root} do
+      assert :ok = Disk.upload("perms/secret.txt", "data", ctx)
+
+      {:ok, file_stat} = File.stat(Path.join(root, "perms/secret.txt"))
+      assert Bitwise.band(file_stat.mode, 0o777) == 0o600
+
+      {:ok, dir_stat} = File.stat(Path.join(root, "perms"))
+      assert Bitwise.band(dir_stat.mode, 0o777) == 0o700
+    end
+  end
+
   describe "download/2" do
     test "downloads an existing file", %{ctx: ctx, root: root} do
       File.write!(Path.join(root, "test.txt"), "hello")

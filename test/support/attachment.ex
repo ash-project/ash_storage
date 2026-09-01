@@ -14,6 +14,7 @@ defmodule AshStorage.Test.Attachment do
     belongs_to_resource(:post, AshStorage.Test.Post)
     belongs_to_resource(:analyzable_post, AshStorage.Test.AnalyzablePost)
     belongs_to_resource(:variant_post, AshStorage.Test.VariantPost)
+    belongs_to_resource(:encrypted_variant_post, AshStorage.Test.EncryptedVariantPost)
   end
 
   attributes do

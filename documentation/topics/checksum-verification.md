@@ -37,11 +37,13 @@ auto-confirm step before linking:
 
 ### Downloads
 
-`AshStorage.Operations.download/2` populates `:expected_md5` from
-`blob.checksum` before invoking the service. The service hashes the
-downloaded bytes and returns `{:error, :checksum_mismatch}` if they
-disagree. Internal callers (analyzers, variant generation) use this
-helper. External callers can call `Service.download/2` directly to skip
+The BlobIO read path populates `:expected_md5` from `blob.checksum` before
+invoking the service. The service hashes the downloaded stored bytes and
+returns `{:error, :checksum_mismatch}` if they disagree. Read layers run only
+after that verification succeeds.
+
+`AshStorage.Operations.download/2`, analyzers, and variant generation all read
+through BlobIO. External callers can call `Service.download/2` directly to skip
 verification.
 
 `AshStorage.Plug.Proxy` deliberately does NOT verify. The plug streams

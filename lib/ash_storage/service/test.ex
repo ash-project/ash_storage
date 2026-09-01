@@ -69,6 +69,9 @@ defmodule AshStorage.Service.Test do
   end
 
   @impl true
+  def service_opts_fields, do: [base_url: [type: :string]]
+
+  @impl true
   def upload(key, io, %AshStorage.Service.Context{} = ctx) do
     do_upload(key, io, ctx.service_opts)
   end

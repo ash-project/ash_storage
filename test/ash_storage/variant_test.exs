@@ -160,6 +160,63 @@ defmodule AshStorage.VariantTest do
     end
   end
 
+  describe "encrypted variants" do
+    setup do
+      # The Cloak key manager probes the vault with function_exported?/3, which is
+      # false for a not-yet-loaded module. A real (GenServer) vault is always
+      # loaded via the supervision tree; load the support vault to match.
+      Code.ensure_loaded!(AshStorage.Test.EncryptedVariantVault)
+      :ok
+    end
+
+    test "variant generation round-trips through BlobIO (decrypt source → transform → re-encrypt)" do
+      post =
+        AshStorage.Test.EncryptedVariantPost
+        |> Ash.Changeset.for_create(:create, %{title: "enc"})
+        |> Ash.create!()
+
+      {:ok, %{record: post}} =
+        AshStorage.Operations.attach(post, :document, "hello world",
+          filename: "secret.txt",
+          content_type: "text/plain"
+        )
+
+      post = Ash.load!(post, document: [blob: :variants])
+      blob = post.document.blob
+
+      # The source blob itself is encrypted at rest, not plaintext.
+      {:ok, stored_source} = AshStorage.Service.Test.download(blob.key, [])
+      refute stored_source == "hello world"
+
+      variant = Enum.find(blob.variants, &(&1.variant_name == "eager_uppercase"))
+      assert variant != nil
+
+      # The variant was RE-encrypted on write: its at-rest bytes are not the
+      # transformed plaintext, and it carries the encryption layer's metadata.
+      {:ok, stored_variant} = AshStorage.Service.Test.download(variant.key, [])
+      refute stored_variant == "HELLO WORLD"
+
+      variant_layers = get_in(variant.metadata, ["ash_storage", "blob_io", "layers"])
+      envelope = Enum.find(variant_layers, &(&1["layer_metadata_key"] == "doc-envelope"))
+      assert envelope["metadata"]["format"] == "aes-256-gcm"
+
+      # Reading the variant back through BlobIO decrypts it to the transformed
+      # plaintext — the full read→decrypt / transform / write→re-encrypt round-trip.
+      {:ok, attachment} =
+        AshStorage.Info.attachment(AshStorage.Test.EncryptedVariantPost, :document)
+
+      read_bctx =
+        AshStorage.BlobIO.BlobContext.new(
+          resource: AshStorage.Test.EncryptedVariantPost,
+          attachment: attachment,
+          blob: variant,
+          operation: :download
+        )
+
+      assert {:ok, "HELLO WORLD"} = AshStorage.BlobIO.read(variant, read_bctx)
+    end
+  end
+
   describe "variant digest" do
     test "different opts produce different digests" do
       d1 =

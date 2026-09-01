@@ -27,24 +27,19 @@ defmodule AshStorage.Calculations.Url do
      Enum.map(records, fn attachment ->
        with {:ok, resource} <- resolve_parent_resource(attachment, parent_resources),
             attachment_name = String.to_existing_atom(attachment.name),
-            {:ok, attachment_def} <- AshStorage.Info.attachment(resource, attachment_name),
-            {:ok, {service_mod, service_opts}} <-
-              AshStorage.Info.service_for_attachment(resource, attachment_def) do
-         ctx =
-           AshStorage.Service.Context.new(service_opts,
+            {:ok, attachment_def} <- AshStorage.Info.attachment(resource, attachment_name) do
+         bctx =
+           AshStorage.BlobIO.BlobContext.new(
              resource: resource,
              attachment: attachment_def,
+             attachment_row: attachment,
+             blob: attachment.blob,
              actor: Map.get(context, :actor),
-             tenant: Map.get(context, :tenant)
+             tenant: Map.get(context, :tenant),
+             operation: :serve
            )
 
-         url_ctx = %{
-           ctx
-           | service_opts:
-               Keyword.put(ctx.service_opts, :original_filename, attachment.blob.filename)
-         }
-
-         service_mod.url(attachment.blob.key, url_ctx)
+         AshStorage.BlobIO.url(attachment.blob, bctx)
        else
          _ -> nil
        end

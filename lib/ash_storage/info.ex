@@ -58,6 +58,34 @@ defmodule AshStorage.Info do
     end
   end
 
+  @doc """
+  Get the effective layers for an attachment.
+
+  Resource-level layers apply first and attachment-level layers apply second.
+  """
+  def layers_for_attachment(resource, attachment) do
+    resource_layers(resource) ++ attachment_layers(resource, attachment)
+  end
+
+  defp resource_layers(resource) do
+    resource
+    |> Spark.Dsl.Extension.get_entities([:storage])
+    |> Enum.filter(&match?(%AshStorage.LayerDefinition{}, &1))
+    |> normalize_layers()
+  end
+
+  defp attachment_layers(_resource, attachment) do
+    attachment
+    |> Map.get(:layer_definitions, [])
+    |> normalize_layers()
+  end
+
+  defp normalize_layers(nil), do: []
+  defp normalize_layers(layers) when is_list(layers), do: Enum.map(layers, &normalize_layer/1)
+  defp normalize_layers(layer), do: [normalize_layer(layer)]
+
+  defp normalize_layer(layer), do: AshStorage.LayerDefinition.normalize_spec(layer)
+
   defp fetch_attachment_config(resource, entity_type, name, key) do
     with otp_app when not is_nil(otp_app) <-
            Spark.Dsl.Extension.get_persisted(resource, :otp_app),

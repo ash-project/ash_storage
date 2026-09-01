@@ -45,7 +45,22 @@ defmodule AshStorage do
 
   alias AshStorage.AnalyzerDefinition
   alias AshStorage.AttachmentDefinition
+  alias AshStorage.LayerDefinition
   alias AshStorage.VariantDefinition
+
+  @layer_schema [
+    module: [
+      type: {:or, [:atom, {:tuple, [:atom, :keyword_list]}]},
+      required: true,
+      doc:
+        "The layer module, or a `{module, opts}` tuple where opts are passed to the layer callbacks."
+    ],
+    metadata_key: [
+      type: :string,
+      required: false,
+      doc: "Stable identifier for this configured layer instance in persisted blob metadata."
+    ]
+  ]
 
   @analyzer %Spark.Dsl.Entity{
     name: :analyzer,
@@ -67,10 +82,27 @@ defmodule AshStorage do
     examples: [
       "variant :thumbnail, {MyApp.ImageResize, width: 200, height: 200}",
       "variant :hero, {MyApp.ImageResize, width: 1200, format: :jpg}, generate: :eager",
-      "variant :pdf_preview, MyApp.PdfThumbnail, generate: :oban"
+      "variant :pdf_preview, MyApp.PdfThumbnail, generate: :oban",
+      "variant :small_preview, MyApp.Thumbnail, generate: :oban, group: :previews, order: 1"
     ],
     schema: VariantDefinition.schema(),
     target: VariantDefinition
+  }
+
+  @layer %Spark.Dsl.Entity{
+    name: :layer,
+    args: [:module],
+    describe: "Declares a layer in the logical storage IO path.",
+    examples: [
+      "layer MyApp.Storage.AuditLayer",
+      ~S|layer {AshStorage.Layer.Encryption,
+       proxy_base_url: "/storage",
+       key_manager: {MyApp.DocumentKeyManager, vault: MyApp.Vault}},
+      metadata_key: "document-envelope"|
+    ],
+    schema: @layer_schema,
+    target: LayerDefinition,
+    transform: {LayerDefinition, :transform, []}
   }
 
   @has_one_attached %Spark.Dsl.Entity{
@@ -79,13 +111,17 @@ defmodule AshStorage do
     describe: "Declares a single file attachment on this resource.",
     examples: [
       "has_one_attached :avatar",
-      ~s(has_one_attached :cover_image, service: {AshStorage.Service.Disk, root: "priv/storage"})
+      ~s(has_one_attached :cover_image, service: {AshStorage.Service.Disk, root: "priv/storage"}),
+      ~S|has_one_attached :document do
+  layer MyApp.Storage.AuditLayer
+end|
     ],
     schema: AttachmentDefinition.has_one_schema(),
     target: AttachmentDefinition,
     auto_set_fields: [type: :one],
     entities: [
       analyzers: [@analyzer],
+      layer_definitions: [@layer],
       variants: [@variant]
     ]
   }
@@ -103,6 +139,7 @@ defmodule AshStorage do
     auto_set_fields: [type: :many],
     entities: [
       analyzers: [@analyzer],
+      layer_definitions: [@layer],
       variants: [@variant]
     ]
   }
@@ -130,6 +167,7 @@ defmodule AshStorage do
       ]
     ],
     entities: [
+      @layer,
       @has_one_attached,
       @has_many_attached
     ]
@@ -139,6 +177,7 @@ defmodule AshStorage do
     sections: [@storage],
     transformers: [AshStorage.Transformers.SetupStorage],
     verifiers: [
+      AshStorage.Verifiers.ValidateBlobIOLayers,
       AshStorage.Verifiers.ValidateObanAnalyzers,
       AshStorage.Verifiers.ValidateObanVariants
     ]

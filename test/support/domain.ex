@@ -12,6 +12,8 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.ConfigurablePost
     resource AshStorage.Test.AnalyzablePost
     resource AshStorage.Test.VariantPost
+    resource AshStorage.Test.EncryptedVariantPost
+    resource AshStorage.Test.LayeredPost
     resource AshStorage.Test.IntegerPost
     resource AshStorage.Test.IntegerAttachment
     resource AshStorage.Test.ExtraAttrsPost

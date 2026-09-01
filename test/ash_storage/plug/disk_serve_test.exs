@@ -35,6 +35,8 @@ defmodule AshStorage.Plug.DiskServeTest do
       conn = call("/hello.txt")
       assert conn.status == 200
       assert conn.resp_body == "hello world"
+      # Public (unsigned) serving is not forced to no-store (the signed-only hardening).
+      refute Plug.Conn.get_resp_header(conn, "cache-control") == ["no-store, private"]
     end
 
     test "sets content-type from file extension" do
@@ -63,6 +65,20 @@ defmodule AshStorage.Plug.DiskServeTest do
     test "returns 404 for empty path" do
       conn = call("/")
       assert conn.status == 404
+    end
+
+    test "returns 404 for keys that traverse outside the root" do
+      # Plant a sentinel one level above the served root.
+      outside = Path.join(Path.dirname(@root), "disk_serve_escaped.txt")
+      File.write!(outside, "TOP SECRET")
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      for path <- ["/../disk_serve_escaped.txt", "/../../etc/passwd",
+                   "/a/../../disk_serve_escaped.txt"] do
+        conn = call(path)
+        assert conn.status == 404
+        refute conn.resp_body == "TOP SECRET"
+      end
     end
   end
 
@@ -104,6 +120,8 @@ defmodule AshStorage.Plug.DiskServeTest do
 
       assert conn.status == 200
       assert conn.resp_body == "hello world"
+      # Signed (token-bearing) responses must not be cached by intermediaries.
+      assert Plug.Conn.get_resp_header(conn, "cache-control") == ["no-store, private"]
     end
 
     test "serves file with valid token using key/filename path" do
@@ -162,6 +180,51 @@ defmodule AshStorage.Plug.DiskServeTest do
       assert conn.status == 200
       [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
       assert disposition == "attachment; filename=\"download.txt\""
+    end
+
+    test "images render inline by default; nosniff always set (symmetric with Proxy)" do
+      File.write!(Path.join(@root, "photo.png"), "img")
+
+      conn =
+        conn(:get, "/photo.png")
+        |> DiskServe.call(DiskServe.init(root: @root))
+
+      assert conn.status == 200
+      assert Plug.Conn.get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
+      assert disposition == "inline"
+    end
+
+    test "a non-allowlisted type is attachment by default" do
+      # hello.txt (text/plain) is not in the default :images policy.
+      conn =
+        conn(:get, "/hello.txt")
+        |> DiskServe.call(DiskServe.init(root: @root))
+
+      [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
+      assert disposition == "attachment"
+    end
+
+    test "inline: :none forces attachment even for images" do
+      File.write!(Path.join(@root, "photo.png"), "img")
+
+      conn =
+        conn(:get, "/photo.png")
+        |> DiskServe.call(DiskServe.init(root: @root, inline: :none))
+
+      [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
+      assert disposition == "attachment"
+    end
+
+    test "a scriptable type stays attachment even under an inline policy" do
+      File.write!(Path.join(@root, "logo.svg"), "<svg onload=\"alert(1)\"/>")
+
+      conn =
+        conn(:get, "/logo.svg")
+        |> DiskServe.call(DiskServe.init(root: @root, inline: :images))
+
+      [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
+      assert disposition == "attachment"
     end
   end
 end

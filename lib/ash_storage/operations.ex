@@ -14,7 +14,11 @@ defmodule AshStorage.Operations do
   """
 
   require Ash.Query
+  require Logger
 
+  alias AshStorage.AnalyzerMetadata
+  alias AshStorage.BlobIO
+  alias AshStorage.BlobIO.Support, as: BlobIOSupport
   alias AshStorage.Info
   alias AshStorage.Service.Context
 
@@ -70,42 +74,38 @@ defmodule AshStorage.Operations do
   is involved yet.
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
-    with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
-      ctx = build_context(service_opts, resource, attachment_def, opts)
-
+    with {:ok, attachment_def} <- Info.attachment(resource, attachment_name) do
       {arg_opts, action_opts} =
         Keyword.split(opts, [:filename, :content_type, :byte_size, :checksum, :metadata])
 
-      filename = Keyword.fetch!(arg_opts, :filename)
-      content_type = Keyword.get(arg_opts, :content_type, "application/octet-stream")
-      byte_size = Keyword.get(arg_opts, :byte_size, 0)
-      checksum = Keyword.get(arg_opts, :checksum, "")
-      metadata = Keyword.get(arg_opts, :metadata, %{})
+      bctx =
+        BlobIO.BlobContext.from_opts(resource, attachment_def,
+          actor: Keyword.get(action_opts, :actor),
+          tenant: Keyword.get(action_opts, :tenant),
+          operation: :direct_upload
+        )
+
+      # A `path` function needs a changeset to derive the key from, and a direct
+      # upload has none — `resolve_key_with_tenant/3` falls back to the
+      # tenant/random default. Make that silent inconsistency visible: blobs
+      # direct-uploaded for this attachment will not share the derived layout.
+      if is_function(attachment_def.path) do
+        Logger.warning(
+          "attachment #{inspect(attachment_name)} on #{inspect(resource)} declares a `path` " <>
+            "for storage keys, but direct uploads have no changeset to derive a key from. " <>
+            "Falling back to the tenant/random default key."
+        )
+      end
 
       key =
         AshStorage.resolve_key_with_tenant(attachment_def, Keyword.get(opts, :tenant), resource)
 
-      blob_resource = Info.storage_blob_resource!(resource)
-
-      with {:ok, blob} <-
-             Ash.create(
-               blob_resource,
-               %{
-                 key: key,
-                 filename: filename,
-                 content_type: content_type,
-                 byte_size: byte_size,
-                 checksum: checksum,
-                 service_name: service_mod,
-                 service_opts: persistable_service_opts(service_mod, service_opts),
-                 metadata: metadata
-               },
-               Keyword.merge(action_opts, action: :create)
-             ),
-           {:ok, upload_info} <- service_mod.direct_upload(key, ctx) do
-        {:ok, Map.put(upload_info, :blob, blob)}
-      end
+      BlobIO.prepare_direct_upload(
+        bctx,
+        arg_opts
+        |> Keyword.put(:key, key)
+        |> Keyword.put(:ash_opts, action_opts)
+      )
     end
   end
 
@@ -208,17 +208,16 @@ defmodule AshStorage.Operations do
   - `:tenant` - the current tenant
   """
   def download(blob, opts \\ []) do
-    ctx =
-      blob
-      |> build_blob_context(opts)
-      |> Context.put_expected_md5(presence(blob.checksum))
+    bctx =
+      BlobIO.BlobContext.new(
+        blob: blob,
+        actor: Keyword.get(opts, :actor),
+        tenant: Keyword.get(opts, :tenant),
+        operation: :download
+      )
 
-    blob.service_name.download(blob.key, ctx)
+    BlobIO.read(blob, bctx)
   end
-
-  defp presence(nil), do: nil
-  defp presence(""), do: nil
-  defp presence(value), do: value
 
   @doc """
   Run a specific analyzer on a blob, downloading the file from storage if needed.
@@ -247,7 +246,9 @@ defmodule AshStorage.Operations do
         content_type = blob.content_type || "application/octet-stream"
 
         if analyzer_module.accept?(content_type) do
-          with {:ok, data} <- download(blob, opts) do
+          with {:ok, bctx} <-
+                 analyzer_blob_context(blob, analyzer_entry, analyzer_key, analyzer_module, opts),
+               {:ok, data} <- BlobIO.read(blob, bctx) do
             path =
               Path.join(
                 System.tmp_dir!(),
@@ -370,6 +371,41 @@ defmodule AshStorage.Operations do
 
   # -- Private helpers --
 
+  defp analyzer_blob_context(blob, analyzer_entry, analyzer_key, analyzer_module, opts) do
+    case AnalyzerMetadata.fetch_source(analyzer_entry) do
+      {:ok, resource, attachment_def} ->
+        {:ok, build_analyzer_blob_context(blob, analyzer_module, opts, resource, attachment_def)}
+
+      :missing ->
+        if BlobIOSupport.layer_metadata_from_blob(blob) == [] do
+          {:ok, build_analyzer_blob_context(blob, analyzer_module, opts)}
+        else
+          {:error, {:missing_blob_io_context, :analyzer, analyzer_key}}
+        end
+
+      {:error, reason} ->
+        {:error, {:invalid_blob_io_context, :analyzer, analyzer_key, reason}}
+    end
+  end
+
+  defp build_analyzer_blob_context(
+         blob,
+         analyzer_module,
+         opts,
+         resource \\ nil,
+         attachment \\ nil
+       ) do
+    BlobIO.BlobContext.new(
+      resource: resource,
+      attachment: attachment,
+      blob: blob,
+      actor: Keyword.get(opts, :actor),
+      tenant: Keyword.get(opts, :tenant),
+      operation: :analyze,
+      analyzer: analyzer_module
+    )
+  end
+
   # sobelow_skip ["DOS.BinToAtom"]
   defp maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge, context_opts) do
     write_attributes = analyzer_entry["write_attributes"]
@@ -405,28 +441,6 @@ defmodule AshStorage.Operations do
             :ok
         end
       end
-    end
-  end
-
-  defp build_blob_context(blob, opts) do
-    blob = Ash.load!(blob, :parsed_service_opts)
-
-    Context.new(blob.parsed_service_opts || [],
-      actor: Keyword.get(opts, :actor),
-      tenant: Keyword.get(opts, :tenant)
-    )
-  end
-
-  defp persistable_service_opts(service_mod, service_opts) do
-    if function_exported?(service_mod, :service_opts_fields, 0) do
-      fields = service_mod.service_opts_fields()
-      field_names = Keyword.keys(fields)
-
-      service_opts
-      |> Keyword.take(field_names)
-      |> Map.new()
-    else
-      %{}
     end
   end
 

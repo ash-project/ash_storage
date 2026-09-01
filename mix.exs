@@ -63,9 +63,14 @@ defmodule AshStorage.MixProject do
         {"README.md", title: "Home"},
         "documentation/topics/analyzers.md",
         "documentation/topics/variants.md",
+        "documentation/topics/layers.md",
+        "documentation/topics/encryption.md",
         "documentation/topics/file-arguments.md",
         "documentation/topics/direct-uploads.md",
+        "documentation/topics/serving.md",
+        "documentation/topics/storage-keys.md",
         "documentation/topics/checksum-verification.md",
+        "documentation/topics/faq.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -90,6 +95,30 @@ defmodule AshStorage.MixProject do
         Behaviours: [
           AshStorage.Analyzer,
           AshStorage.Variant
+        ],
+        BlobIO: [
+          AshStorage.BlobIO,
+          AshStorage.BlobIO.BlobContext,
+          AshStorage.BlobIO.Reader.Operation,
+          AshStorage.BlobIO.Writer.Operation,
+          AshStorage.BlobIO.Serving.Operation,
+          AshStorage.BlobIO.DirectUploads.Operation,
+          AshStorage.BlobIO.Operation.PostCreate,
+          AshStorage.BlobIO.Operation.BlobDraft,
+          AshStorage.BlobIO.Operation.ServiceState,
+          AshStorage.BlobIO.Operation.CreateParams,
+          AshStorage.BlobIO.Operation.Finalization
+        ],
+        Layers: [
+          AshStorage.Layer,
+          AshStorage.Layer.Encryption
+        ],
+        Encryption: [
+          AshStorage.Encryption,
+          AshStorage.Encryption.KeyManager,
+          AshStorage.Encryption.KeyManagers.Cloak,
+          AshStorage.Encryption.RewrapOperation,
+          AshStorage.Encryption.WriteFinalization
         ],
         Changes: [
           AshStorage.Changes.HandleFileArgument,
@@ -155,6 +184,7 @@ defmodule AshStorage.MixProject do
       {:req, "~> 0.5", optional: true},
       {:req_s3, "~> 0.2", optional: true},
       {:ash_oban, "~> 0.7", optional: true},
+      {:cloak, "~> 1.1", optional: true},
       {:ash_postgres, "~> 2.0", only: [:dev, :test]},
       # dev/test dependencies
       {:phoenix, "~> 1.7", only: :dev},

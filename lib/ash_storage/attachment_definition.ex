@@ -4,6 +4,7 @@ defmodule AshStorage.AttachmentDefinition do
     :name,
     :type,
     :service,
+    :layer_definitions,
     :dependent,
     :path,
     :sort,

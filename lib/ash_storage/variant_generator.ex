@@ -1,8 +1,7 @@
 defmodule AshStorage.VariantGenerator do
   @moduledoc false
 
-  alias AshStorage.Info
-  alias AshStorage.Service.Context
+  alias AshStorage.BlobIO
   alias AshStorage.VariantDefinition
 
   @doc """
@@ -24,8 +23,16 @@ defmodule AshStorage.VariantGenerator do
   end
 
   defp do_generate(source_blob, module, opts, digest, variant_name, resource, attachment_def) do
-    with {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
-         {:ok, source_data} <- AshStorage.Operations.download(source_blob),
+    source_bctx =
+      BlobIO.BlobContext.new(
+        resource: resource,
+        attachment: attachment_def,
+        blob: source_blob,
+        operation: :variant,
+        variant: variant_name
+      )
+
+    with {:ok, source_data} <- BlobIO.read(source_blob, source_bctx),
          {:ok, transform_result, variant_data} <- run_transform(module, opts, source_data) do
       upload_and_create_variant(
         source_blob,
@@ -34,8 +41,6 @@ defmodule AshStorage.VariantGenerator do
         transform_result,
         variant_data,
         resource,
-        service_mod,
-        service_opts,
         attachment_def
       )
     end
@@ -73,14 +78,8 @@ defmodule AshStorage.VariantGenerator do
          transform_metadata,
          variant_data,
          resource,
-         service_mod,
-         service_opts,
          attachment_def
        ) do
-    key = AshStorage.resolve_variant_key(source_blob.key)
-    checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
-    byte_size = byte_size(variant_data)
-
     variant_content_type =
       Map.get(transform_metadata, :content_type, source_blob.content_type)
 
@@ -91,57 +90,26 @@ defmodule AshStorage.VariantGenerator do
       transform_metadata
       |> Map.drop([:content_type, :filename])
 
-    ctx =
-      Context.new(service_opts,
+    bctx =
+      BlobIO.BlobContext.new(
         resource: resource,
-        attachment: attachment_def
+        attachment: attachment_def,
+        blob: source_blob,
+        operation: :variant,
+        variant: variant_name
       )
 
-    ctx = Context.put_expected_md5(ctx, checksum)
-    blob_resource = Info.storage_blob_resource!(resource)
-
-    with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
-      blob_attrs =
-        %{
-          key: key,
-          filename: variant_filename,
-          content_type: variant_content_type,
-          byte_size: byte_size,
-          checksum: checksum,
-          service_name: service_mod,
-          service_opts: persistable_service_opts(service_mod, service_opts),
-          metadata: extra_metadata,
-          variant_of_blob_id: source_blob.id,
-          variant_name: to_string(variant_name),
-          variant_digest: digest
-        }
-        |> Map.merge(extra_blob_attrs)
-
-      Ash.create(blob_resource, blob_attrs, action: :create_variant)
-    end
-  end
-
-  defp normalize_upload(:ok), do: {:ok, %{}}
-  defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
-  defp normalize_upload({:error, _} = error), do: error
-
-  defp resolve_service(resource, attachment_def) do
-    case Info.service_for_attachment(resource, attachment_def) do
-      {:ok, service} -> {:ok, service}
-      :error -> {:error, :no_service_configured}
-    end
-  end
-
-  defp persistable_service_opts(service_mod, service_opts) do
-    if function_exported?(service_mod, :service_opts_fields, 0) do
-      fields = service_mod.service_opts_fields()
-      field_names = Keyword.keys(fields)
-
-      service_opts
-      |> Keyword.take(field_names)
-      |> Map.new()
-    else
-      %{}
-    end
+    BlobIO.write(variant_data, bctx,
+      action: :create_variant,
+      key: AshStorage.resolve_variant_key(source_blob.key),
+      filename: variant_filename,
+      content_type: variant_content_type,
+      metadata: extra_metadata,
+      blob_attrs: %{
+        variant_of_blob_id: source_blob.id,
+        variant_name: to_string(variant_name),
+        variant_digest: digest
+      }
+    )
   end
 end

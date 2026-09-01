@@ -10,10 +10,15 @@ if Code.ensure_loaded?(ReqS3) do
         storage do
           service {AshStorage.Service.S3,
             bucket: "my-bucket",
-            region: "us-east-1",
-            access_key_id: "AKIA...",
-            secret_access_key: "..."}
+            region: "us-east-1"}
         end
+
+    Credentials are read from the `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+    environment variables (or the instance role). Inlining `:access_key_id` /
+    `:secret_access_key` into `service_opts` is supported but **discouraged**:
+    those keys are not persisted on the blob row (see `service_opts_fields/0`), so
+    an inlined secret will not be available to asynchronous operations (purge,
+    variant generation) that reconstitute the service from the persisted opts.
 
     ## Options
 
@@ -32,11 +37,14 @@ if Code.ensure_loaded?(ReqS3) do
 
     @impl true
     def service_opts_fields do
+      # `:access_key_id` / `:secret_access_key` are intentionally NOT persistable:
+      # they must never round-trip onto the (public, writable) blob row. They are
+      # still accepted as DSL/runtime options (resolved by `resolve_credential/3`),
+      # but credentials should come from `AWS_*` env / instance role. This mirrors
+      # the AzureBlob convention of keeping raw secrets out of `service_opts_fields/0`.
       [
         bucket: [type: :string, allow_nil?: false],
         region: [type: :string],
-        access_key_id: [type: :string],
-        secret_access_key: [type: :string],
         endpoint_url: [type: :string],
         prefix: [type: :string],
         decode_body: [type: :boolean]

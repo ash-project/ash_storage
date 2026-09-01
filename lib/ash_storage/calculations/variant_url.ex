@@ -18,15 +18,14 @@ defmodule AshStorage.Calculations.VariantUrl do
     {:ok, attachment_def} = AshStorage.Info.attachment(resource, attachment_name)
     variant_def = Enum.find(attachment_def.variants, &(&1.name == variant_name))
 
-    {:ok, {service_mod, service_opts}} =
-      AshStorage.Info.service_for_attachment(resource, attachment_def)
-
-    ctx =
-      AshStorage.Service.Context.new(service_opts,
+    bctx =
+      AshStorage.BlobIO.BlobContext.new(
         resource: resource,
         attachment: attachment_def,
         actor: Map.get(context, :actor),
-        tenant: Map.get(context, :tenant)
+        tenant: Map.get(context, :tenant),
+        operation: :serve,
+        variant: variant_name
       )
 
     {:ok,
@@ -43,7 +42,7 @@ defmodule AshStorage.Calculations.VariantUrl do
                generate_variant(source_blob, variant_def, resource, attachment_def)
 
            if variant_blob do
-             service_mod.url(variant_blob.key, ctx)
+             AshStorage.BlobIO.url(variant_blob, bctx)
            end
        end
      end)}

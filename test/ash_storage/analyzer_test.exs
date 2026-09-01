@@ -14,6 +14,12 @@ defmodule AshStorage.AnalyzerTest do
     |> Ash.create!()
   end
 
+  defp create_layered_post!(title \\ "layered") do
+    AshStorage.Test.LayeredPost
+    |> Ash.Changeset.for_create(:create, %{title: title})
+    |> Ash.create!()
+  end
+
   describe "eager analyzers" do
     test "runs analyzer and merges metadata into blob" do
       post = create_post!()
@@ -133,6 +139,118 @@ defmodule AshStorage.AnalyzerTest do
 
       analyzer_entry = blob.analyzers[to_string(AshStorage.Test.TestAnalyzer)]
       assert analyzer_entry["opts"] == %{"include_word_count" => true}
+    end
+
+    test "stores analyzer source context in the analyzers map" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :photo, "data",
+          filename: "photo.txt",
+          content_type: "text/plain"
+        )
+
+      source = blob.analyzers[to_string(AshStorage.Test.TestAnalyzer)]["source"]
+
+      assert source == %{
+               "resource" => to_string(AshStorage.Test.AnalyzablePost),
+               "attachment" => "photo"
+             }
+    end
+
+    test "stores analyzer source context for file argument attachments" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_analyzer_arg_test.txt")
+      File.write!(path, "hello\n")
+
+      file = Ash.Type.File.from_path(path)
+
+      post =
+        AshStorage.Test.AnalyzablePost
+        |> Ash.Changeset.for_create(:create_with_doc, %{
+          title: "with arg",
+          document_file: file
+        })
+        |> Ash.create!()
+
+      blob = post.__metadata__[:document_blob]
+      source = blob.analyzers[to_string(AshStorage.Test.TestAnalyzer)]["source"]
+
+      assert source == %{
+               "resource" => to_string(AshStorage.Test.AnalyzablePost),
+               "attachment" => "document"
+             }
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_analyzer_arg_test.txt"))
+    end
+  end
+
+  describe "async analyzer BlobIO context" do
+    test "uses analyzer source context to read layered blobs" do
+      post = create_layered_post!()
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :cover_image, "hello\nworld\n",
+          filename: "hello.txt",
+          content_type: "text/plain"
+        )
+
+      assert {:ok, "hello\nworld\n-resource-cover"} =
+               AshStorage.Service.Test.download(blob.key, [])
+
+      {:ok, attachment_def} =
+        AshStorage.Info.attachment(AshStorage.Test.LayeredPost, :cover_image)
+
+      analyzer_key = to_string(AshStorage.Test.TestAnalyzer)
+
+      {:ok, blob} =
+        Ash.update(
+          blob,
+          %{
+            analyzers: %{
+              analyzer_key => %{
+                "status" => "pending",
+                "opts" => %{},
+                "source" =>
+                  AshStorage.AnalyzerMetadata.source(
+                    AshStorage.Test.LayeredPost,
+                    attachment_def
+                  )
+              }
+            }
+          },
+          action: :update_metadata
+        )
+
+      {:ok, updated_blob} = Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer)
+
+      assert updated_blob.metadata["line_count"] == 3
+      assert updated_blob.analyzers[analyzer_key]["status"] == "complete"
+    end
+
+    test "returns a context error for layered blobs with old analyzer metadata" do
+      post = create_layered_post!()
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :cover_image, "hello",
+          filename: "hello.txt",
+          content_type: "text/plain"
+        )
+
+      analyzer_key = to_string(AshStorage.Test.TestAnalyzer)
+
+      {:ok, blob} =
+        Ash.update(
+          blob,
+          %{
+            analyzers: %{
+              analyzer_key => %{"status" => "pending", "opts" => %{}}
+            }
+          },
+          action: :update_metadata
+        )
+
+      assert {:error, {:missing_blob_io_context, :analyzer, ^analyzer_key}} =
+               Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer)
     end
   end
 
