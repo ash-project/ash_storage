@@ -418,7 +418,8 @@ defmodule AshStorage.Operations do
   end
 
   defp persistable_service_opts(service_mod, service_opts) do
-    if function_exported?(service_mod, :service_opts_fields, 0) do
+    if Code.ensure_loaded?(service_mod) and
+         function_exported?(service_mod, :service_opts_fields, 0) do
       fields = service_mod.service_opts_fields()
       field_names = Keyword.keys(fields)
 
