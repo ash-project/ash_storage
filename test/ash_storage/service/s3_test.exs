@@ -6,6 +6,30 @@ defmodule AshStorage.Service.S3Test do
   alias AshStorage.Service.{Context, S3}
   alias AshStorage.Test.{Blob, ConfigurablePost}
 
+  defmodule StaticCredentials do
+    @moduledoc false
+    # The recipe from the S3 moduledoc: static credentials from app config,
+    # merged in on every call, so nothing secret is persisted or read from
+    # the environment — including on paths that start from a blob row.
+    @behaviour AshStorage.Service
+    alias AshStorage.Service.S3
+
+    defdelegate service_opts_fields, to: S3
+
+    def upload(key, data, ctx), do: S3.upload(key, data, with_credentials(ctx))
+    def download(key, ctx), do: S3.download(key, with_credentials(ctx))
+    def delete(key, ctx), do: S3.delete(key, with_credentials(ctx))
+    def exists?(key, ctx), do: S3.exists?(key, with_credentials(ctx))
+    def head(key, ctx), do: S3.head(key, with_credentials(ctx))
+    def url(key, ctx), do: S3.url(key, with_credentials(ctx))
+    def direct_upload(key, ctx), do: S3.direct_upload(key, with_credentials(ctx))
+
+    defp with_credentials(ctx) do
+      credentials = Application.fetch_env!(:ash_storage, :s3_test_static_credentials)
+      %{ctx | service_opts: Keyword.merge(ctx.service_opts, credentials)}
+    end
+  end
+
   @env ~w(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY S3_TEST_ACCESS_KEY_ID S3_TEST_SECRET_ACCESS_KEY)
 
   setup do
@@ -128,6 +152,30 @@ defmodule AshStorage.Service.S3Test do
       assert_raise ArgumentError, ~r/could not generate S3 presigned URL/, fn ->
         S3.url("k", Context.new(bucket: "test-bucket", presigned: true))
       end
+    end
+  end
+
+  describe "static credentials without environment variables (the documented recipe)" do
+    test "an app-side service carries them to an operation that starts from the row" do
+      Application.put_env(:ash_storage, :s3_test_static_credentials,
+        access_key_id: "AKIASTATIC",
+        secret_access_key: "static-secret"
+      )
+
+      on_exit(fn -> Application.delete_env(:ash_storage, :s3_test_static_credentials) end)
+
+      Application.put_env(:ash_storage, ConfigurablePost,
+        storage: [service: {StaticCredentials, bucket: "test-bucket", region: "us-east-1"}]
+      )
+
+      row = prepare!()
+      assert row.service_name == StaticCredentials
+      assert persisted(row) == %{"bucket" => "test-bucket", "region" => "us-east-1"}
+
+      # No environment at all (the setup cleared AWS_*): the row alone.
+      ctx = Context.new(row.parsed_service_opts)
+      assert {:ok, %{url: url}} = StaticCredentials.direct_upload(row.key, ctx)
+      assert url =~ "X-Amz-Credential=AKIASTATIC"
     end
   end
 end

@@ -40,6 +40,39 @@ if Code.ensure_loaded?(ReqS3) do
     - `:decode_body` - opt back into Req's content-type response decoding on
       `download/2`. Defaults to `false`; see the `AshStorage.Service`
       `download/2` callback docs for the raw-bytes contract.
+
+    ## Static credentials without environment variables
+
+    Credentials are never persisted on blob records, so an operation that
+    starts from a record — purge, analysis, variants — resolves them from the
+    environment variables the record names. If static credentials must stay
+    out of the environment altogether, wrap this service in a small module of
+    your own that merges them in from your application's configuration on
+    every call, and configure that module as the service:
+
+        defmodule MyApp.S3 do
+          @behaviour AshStorage.Service
+          alias AshStorage.Service.S3
+
+          defdelegate service_opts_fields, to: S3
+
+          def upload(key, data, ctx), do: S3.upload(key, data, with_credentials(ctx))
+          def download(key, ctx), do: S3.download(key, with_credentials(ctx))
+          def delete(key, ctx), do: S3.delete(key, with_credentials(ctx))
+          def exists?(key, ctx), do: S3.exists?(key, with_credentials(ctx))
+          def head(key, ctx), do: S3.head(key, with_credentials(ctx))
+          def url(key, ctx), do: S3.url(key, with_credentials(ctx))
+          def direct_upload(key, ctx), do: S3.direct_upload(key, with_credentials(ctx))
+
+          defp with_credentials(ctx) do
+            credentials = Application.fetch_env!(:my_app, :s3_credentials)
+            %{ctx | service_opts: Keyword.merge(ctx.service_opts, credentials)}
+          end
+        end
+
+    Blob records then persist `MyApp.S3` as the service, with the same
+    credential-free options, and every call — including one that starts from
+    a record — gets the credentials merged in at call time.
     """
 
     @behaviour AshStorage.Service
