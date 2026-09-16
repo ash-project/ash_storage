@@ -11,16 +11,30 @@ if Code.ensure_loaded?(ReqS3) do
           service {AshStorage.Service.S3,
             bucket: "my-bucket",
             region: "us-east-1",
-            access_key_id: "AKIA...",
-            secret_access_key: "..."}
+            access_key_id_env: "MY_APP_AWS_ACCESS_KEY_ID",
+            secret_access_key_env: "MY_APP_AWS_SECRET_ACCESS_KEY"}
         end
+
+    Prefer `:access_key_id_env` / `:secret_access_key_env` over literal
+    secrets. Raw `:access_key_id` and `:secret_access_key` values are accepted
+    for immediate service calls, but are intentionally not persisted on blob
+    records. Use env-backed credentials for attachment flows that later operate
+    from stored blob records, such as purge, analysis, and variants.
 
     ## Options
 
     - `:bucket` - (required) the S3 bucket name
     - `:region` - AWS region (default: `"us-east-1"`)
-    - `:access_key_id` - AWS access key ID (falls back to `AWS_ACCESS_KEY_ID` env var)
-    - `:secret_access_key` - AWS secret access key (falls back to `AWS_SECRET_ACCESS_KEY` env var)
+    - `:access_key_id` - AWS access key ID. Falls back to the environment
+      variable named by `:access_key_id_env`. Not persisted on blob records;
+      use `:access_key_id_env` for purge/analysis/variants
+    - `:access_key_id_env` - environment variable to read the access key ID
+      from (default: `"AWS_ACCESS_KEY_ID"`)
+    - `:secret_access_key` - AWS secret access key. Falls back to the
+      environment variable named by `:secret_access_key_env`. Not persisted on
+      blob records; use `:secret_access_key_env` for purge/analysis/variants
+    - `:secret_access_key_env` - environment variable to read the secret
+      access key from (default: `"AWS_SECRET_ACCESS_KEY"`)
     - `:endpoint_url` - custom endpoint URL for S3-compatible services (e.g. MinIO, Tigris)
     - `:prefix` - optional key prefix (e.g. `"uploads/"`)
     - `:decode_body` - opt back into Req's content-type response decoding on
@@ -30,13 +44,18 @@ if Code.ensure_loaded?(ReqS3) do
 
     @behaviour AshStorage.Service
 
+    @default_access_key_id_env "AWS_ACCESS_KEY_ID"
+    @default_secret_access_key_env "AWS_SECRET_ACCESS_KEY"
+
+    # Persisted on the blob row: the connection shape and the *names* of the
+    # credential environment variables, never the credentials themselves.
     @impl true
     def service_opts_fields do
       [
         bucket: [type: :string, allow_nil?: false],
         region: [type: :string],
-        access_key_id: [type: :string],
-        secret_access_key: [type: :string],
+        access_key_id_env: [type: :string],
+        secret_access_key_env: [type: :string],
         endpoint_url: [type: :string],
         prefix: [type: :string],
         decode_body: [type: :boolean]
@@ -53,10 +72,12 @@ if Code.ensure_loaded?(ReqS3) do
         |> maybe_put_content_md5(ctx, data)
         |> maybe_put_content_type(ctx)
 
-      case Req.put(req(ctx), put_opts) do
-        {:ok, %{status: status}} when status in 200..299 -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-        {:error, reason} -> {:error, reason}
+      with {:ok, request} <- req(ctx) do
+        case Req.put(request, put_opts) do
+          {:ok, %{status: status}} when status in 200..299 -> :ok
+          {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+          {:error, reason} -> {:error, reason}
+        end
       end
     end
 
@@ -66,8 +87,9 @@ if Code.ensure_loaded?(ReqS3) do
 
       decode_body? = Keyword.get(ctx.service_opts, :decode_body, false)
 
-      with {:ok, %{status: 200, body: body}} <-
-             Req.get(req(ctx), url: "/#{full_key}", decode_body: decode_body?),
+      with {:ok, request} <- req(ctx),
+           {:ok, %{status: 200, body: body}} <-
+             Req.get(request, url: "/#{full_key}", decode_body: decode_body?),
            :ok <- verify_md5(body, ctx.expected_md5) do
         {:ok, body}
       else
@@ -81,11 +103,13 @@ if Code.ensure_loaded?(ReqS3) do
     def delete(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      case Req.delete(req(ctx), url: "/#{full_key}") do
-        {:ok, %{status: status}} when status in [200, 204] -> :ok
-        {:ok, %{status: 404}} -> :ok
-        {:ok, %{status: status, body: body}} -> {:error, {status, body}}
-        {:error, reason} -> {:error, reason}
+      with {:ok, request} <- req(ctx) do
+        case Req.delete(request, url: "/#{full_key}") do
+          {:ok, %{status: status}} when status in [200, 204] -> :ok
+          {:ok, %{status: 404}} -> :ok
+          {:ok, %{status: status, body: body}} -> {:error, {status, body}}
+          {:error, reason} -> {:error, reason}
+        end
       end
     end
 
@@ -93,11 +117,13 @@ if Code.ensure_loaded?(ReqS3) do
     def exists?(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      case Req.head(req(ctx), url: "/#{full_key}") do
-        {:ok, %{status: 200}} -> {:ok, true}
-        {:ok, %{status: 404}} -> {:ok, false}
-        {:ok, %{status: status}} -> {:error, {:unexpected_status, status}}
-        {:error, reason} -> {:error, reason}
+      with {:ok, request} <- req(ctx) do
+        case Req.head(request, url: "/#{full_key}") do
+          {:ok, %{status: 200}} -> {:ok, true}
+          {:ok, %{status: 404}} -> {:ok, false}
+          {:ok, %{status: status}} -> {:error, {:unexpected_status, status}}
+          {:error, reason} -> {:error, reason}
+        end
       end
     end
 
@@ -105,25 +131,27 @@ if Code.ensure_loaded?(ReqS3) do
     def head(key, %AshStorage.Service.Context{} = ctx) do
       full_key = prefixed_key(key, ctx)
 
-      case Req.head(req(ctx), url: "/#{full_key}") do
-        {:ok, %{status: 200, headers: headers}} ->
-          etag = headers |> header(["etag"]) |> unquote_etag()
+      with {:ok, request} <- req(ctx) do
+        case Req.head(request, url: "/#{full_key}") do
+          {:ok, %{status: 200, headers: headers}} ->
+            etag = headers |> header(["etag"]) |> unquote_etag()
 
-          {:ok,
-           %{
-             etag: etag,
-             content_md5: etag_to_md5(etag),
-             byte_size: parse_int(header(headers, ["content-length"]))
-           }}
+            {:ok,
+             %{
+               etag: etag,
+               content_md5: etag_to_md5(etag),
+               byte_size: parse_int(header(headers, ["content-length"]))
+             }}
 
-        {:ok, %{status: 404}} ->
-          {:error, :not_found}
+          {:ok, %{status: 404}} ->
+            {:error, :not_found}
 
-        {:ok, %{status: status, body: body}} ->
-          {:error, {status, body}}
+          {:ok, %{status: status, body: body}} ->
+            {:error, {status, body}}
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
       end
     end
 
@@ -133,24 +161,24 @@ if Code.ensure_loaded?(ReqS3) do
       full_key = prefixed_key(key, ctx)
 
       if Keyword.get(opts, :presigned, false) do
-        presign_opts =
-          [
-            bucket: Keyword.fetch!(opts, :bucket),
-            key: full_key,
-            region: Keyword.get(opts, :region, "us-east-1")
-          ]
-          |> maybe_put(
-            :access_key_id,
-            resolve_credential(opts, :access_key_id, "AWS_ACCESS_KEY_ID")
-          )
-          |> maybe_put(
-            :secret_access_key,
-            resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
-          )
-          |> maybe_put(:endpoint_url, Keyword.get(opts, :endpoint_url))
-          |> maybe_put(:expires, Keyword.get(opts, :expires_in))
+        case resolve_credentials(opts) do
+          {:ok, {access_key_id, secret_access_key}} ->
+            presign_opts =
+              [
+                bucket: Keyword.fetch!(opts, :bucket),
+                key: full_key,
+                region: Keyword.get(opts, :region, "us-east-1"),
+                access_key_id: access_key_id,
+                secret_access_key: secret_access_key
+              ]
+              |> maybe_put(:endpoint_url, Keyword.get(opts, :endpoint_url))
+              |> maybe_put(:expires, Keyword.get(opts, :expires_in))
 
-        ReqS3.presign_url(presign_opts)
+            ReqS3.presign_url(presign_opts)
+
+          {:error, reason} ->
+            raise ArgumentError, "could not generate S3 presigned URL: #{inspect(reason)}"
+        end
       else
         bucket = Keyword.fetch!(opts, :bucket)
         endpoint = endpoint_url(opts)
@@ -178,35 +206,31 @@ if Code.ensure_loaded?(ReqS3) do
       full_key = prefixed_key(key, ctx)
       method = Keyword.get(opts, :direct_upload_method, :put)
 
-      presign_base =
-        [
-          bucket: Keyword.fetch!(opts, :bucket),
-          key: full_key,
-          region: Keyword.get(opts, :region, "us-east-1")
-        ]
-        |> maybe_put(
-          :access_key_id,
-          resolve_credential(opts, :access_key_id, "AWS_ACCESS_KEY_ID")
-        )
-        |> maybe_put(
-          :secret_access_key,
-          resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
-        )
-        |> maybe_put(:endpoint_url, Keyword.get(opts, :endpoint_url))
+      with {:ok, {access_key_id, secret_access_key}} <- resolve_credentials(opts) do
+        presign_base =
+          [
+            bucket: Keyword.fetch!(opts, :bucket),
+            key: full_key,
+            region: Keyword.get(opts, :region, "us-east-1"),
+            access_key_id: access_key_id,
+            secret_access_key: secret_access_key
+          ]
+          |> maybe_put(:endpoint_url, Keyword.get(opts, :endpoint_url))
 
-      case method do
-        :put ->
-          url = ReqS3.presign_url(Keyword.put(presign_base, :method, :put))
-          {:ok, %{url: url, method: :put}}
+        case method do
+          :put ->
+            url = ReqS3.presign_url(Keyword.put(presign_base, :method, :put))
+            {:ok, %{url: url, method: :put}}
 
-        :post ->
-          presign_opts =
-            presign_base
-            |> maybe_put(:content_type, Keyword.get(opts, :content_type))
-            |> maybe_put(:max_size, Keyword.get(opts, :max_size))
+          :post ->
+            presign_opts =
+              presign_base
+              |> maybe_put(:content_type, Keyword.get(opts, :content_type))
+              |> maybe_put(:max_size, Keyword.get(opts, :max_size))
 
-          form = ReqS3.presign_form(presign_opts)
-          {:ok, %{url: form.url, method: :post, fields: form.fields}}
+            form = ReqS3.presign_form(presign_opts)
+            {:ok, %{url: form.url, method: :post, fields: form.fields}}
+        end
       end
     end
 
@@ -214,35 +238,35 @@ if Code.ensure_loaded?(ReqS3) do
 
     defp req(%AshStorage.Service.Context{} = ctx) do
       opts = ctx.service_opts
-      bucket = Keyword.fetch!(opts, :bucket)
-      endpoint = endpoint_url(opts)
 
-      sigv4_opts =
-        [service: :s3, region: Keyword.get(opts, :region, "us-east-1")]
-        |> maybe_put(
-          :access_key_id,
-          resolve_credential(opts, :access_key_id, "AWS_ACCESS_KEY_ID")
-        )
-        |> maybe_put(
-          :secret_access_key,
-          resolve_credential(opts, :secret_access_key, "AWS_SECRET_ACCESS_KEY")
-        )
+      with {:ok, {access_key_id, secret_access_key}} <- resolve_credentials(opts) do
+        bucket = Keyword.fetch!(opts, :bucket)
+        endpoint = endpoint_url(opts)
 
-      tls_versions =
-        Keyword.get(opts, :tls_versions, "tlsv1.2")
-        |> String.split(",")
-        |> Enum.reject(&(String.trim(&1) not in ["tlsv1.2", "tlsv1.3"]))
-        |> Enum.map(&String.to_atom(String.trim(&1)))
+        sigv4_opts = [
+          service: :s3,
+          region: Keyword.get(opts, :region, "us-east-1"),
+          access_key_id: access_key_id,
+          secret_access_key: secret_access_key
+        ]
 
-      transport_opts =
-        [transport_opts: [versions: tls_versions]]
+        tls_versions =
+          Keyword.get(opts, :tls_versions, "tlsv1.2")
+          |> String.split(",")
+          |> Enum.reject(&(String.trim(&1) not in ["tlsv1.2", "tlsv1.3"]))
+          |> Enum.map(&String.to_atom(String.trim(&1)))
 
-      Req.new(
-        base_url: "#{endpoint}/#{bucket}",
-        aws_sigv4: sigv4_opts,
-        retry: :transient,
-        connect_options: transport_opts
-      )
+        transport_opts =
+          [transport_opts: [versions: tls_versions]]
+
+        {:ok,
+         Req.new(
+           base_url: "#{endpoint}/#{bucket}",
+           aws_sigv4: sigv4_opts,
+           retry: :transient,
+           connect_options: transport_opts
+         )}
+      end
     end
 
     defp endpoint_url(opts) do
@@ -258,8 +282,35 @@ if Code.ensure_loaded?(ReqS3) do
       end
     end
 
-    defp resolve_credential(opts, key, env_var) do
-      Keyword.get(opts, key) || System.get_env(env_var)
+    # As `AshStorage.Service.AzureBlob` does it: a raw value in the options wins
+    # for this call; otherwise the environment variable the options name, or
+    # the AWS default. Only the variable names are persisted on blob rows, so
+    # an operation that starts from a row resolves exactly like this one.
+    defp resolve_credentials(opts) do
+      with {:ok, access_key_id} <-
+             resolve_credential(
+               opts,
+               :access_key_id,
+               :access_key_id_env,
+               @default_access_key_id_env
+             ),
+           {:ok, secret_access_key} <-
+             resolve_credential(
+               opts,
+               :secret_access_key,
+               :secret_access_key_env,
+               @default_secret_access_key_env
+             ) do
+        {:ok, {access_key_id, secret_access_key}}
+      end
+    end
+
+    defp resolve_credential(opts, key, env_key, default_env) do
+      case Keyword.get(opts, key) || System.get_env(Keyword.get(opts, env_key) || default_env) do
+        nil -> {:error, :missing_credentials}
+        "" -> {:error, :missing_credentials}
+        value -> {:ok, value}
+      end
     end
 
     defp maybe_put(keyword, _key, nil), do: keyword
