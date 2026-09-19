@@ -1,6 +1,6 @@
 AshStorage.Service.Test.start()
 
-exclude = [:s3_integration, :azure_integration]
+exclude = [:s3_integration, :azure_integration, :google_drive_integration]
 
 exclude =
   case AshStorage.TestRepo.start_link() do

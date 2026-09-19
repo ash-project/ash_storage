@@ -216,6 +216,56 @@ defmodule AshStorage.Operations do
     blob.service_name.download(blob.key, ctx)
   end
 
+  @doc """
+  Stream a blob's bytes from its storage service.
+
+  Returns `{:ok, enumerable}` where the enumerable yields binary chunks that
+  concatenate to the stored bytes. Services implementing the optional
+  `c:AshStorage.Service.stream_download/2` callback stream lazily; the rest fall
+  back to `download/2` and yield the whole body as a single in-memory chunk —
+  switching to `stream_download/2` only bounds memory use for services that
+  actually implement the callback (currently `AshStorage.Service.Disk`).
+
+  Unlike `download/2`, no checksum verification happens on either path — the
+  bytes are handed to the caller before the full body is known. Use
+  `download/2` when the blob's `:checksum` must be verified.
+
+  Enumerating the result can still fail after `{:ok, _}` is returned (e.g. the
+  underlying file is removed between the existence check and the first read).
+  Callers that have already started sending a response to a client should be
+  prepared to handle that.
+
+  ## Options
+  - `:actor` - the current actor
+  - `:tenant` - the current tenant
+  """
+  def stream_download(blob, opts \\ []) do
+    ctx = build_blob_context(blob, opts)
+
+    stream_download_from_service(blob.service_name, ctx, blob.key)
+  end
+
+  @doc """
+  Stream a file from a storage service, falling back to `download/2` for
+  services that don't implement `c:AshStorage.Service.stream_download/2`.
+
+  Callers holding a service module and key rather than a blob record (a proxy
+  plug, for instance) should go through this function so unimplemented services
+  keep working. No checksum verification happens on either path, regardless of
+  whether the context carries an `:expected_md5`.
+  """
+  def stream_download_from_service(service_mod, %Context{} = ctx, key) do
+    ctx = Context.put_expected_md5(ctx, nil)
+
+    if Code.ensure_loaded?(service_mod) and function_exported?(service_mod, :stream_download, 2) do
+      service_mod.stream_download(key, ctx)
+    else
+      with {:ok, data} <- service_mod.download(key, ctx) do
+        {:ok, if(data == "", do: [], else: [data])}
+      end
+    end
+  end
+
   defp presence(nil), do: nil
   defp presence(""), do: nil
   defp presence(value), do: value

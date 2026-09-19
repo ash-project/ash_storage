@@ -62,6 +62,14 @@ Azure-specific checklist:
 - If shared-key access is disabled on the storage account, configure a pre-generated SAS with `:sas_token_env` for now; managed identity / Azure AD user-delegation SAS support is not implemented yet.
 - If you provide a static SAS token via `:sas_token`/`:sas_token_env`, it is reused for every Azure operation. Use a container/account SAS with the needed permissions: read (`r`) for URLs/downloads/existence checks, create/write (`c`, `w`) for uploads/direct uploads, and delete (`d`) for purges.
 
+`AshStorage.Service.GoogleDrive` does not support direct uploads — `direct_upload/2`
+always returns `{:error, :direct_upload_not_supported}`. Drive has no clean
+client-side signed-upload scheme for a service-account-backed adapter without
+delegating OAuth to the browser, and `prepare_direct_upload/3` creates the blob
+record before calling the service, with no way to persist a Drive id discovered
+afterward even if it did. Upload Drive-backed attachments through `attach/4`, or
+call `AshStorage.Service.GoogleDrive.upload/3` directly.
+
 Add the `AshStorage.Changes.AttachBlob` change to your create or update actions:
 
 ```elixir

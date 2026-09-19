@@ -16,9 +16,16 @@ defmodule AshStorage.Service.Disk do
     returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
     plug will verify before serving files.
   - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
+  - `:chunk_size` - bytes per chunk for `stream_download/2` (default: `65_536`).
+    Only `:root` is persisted per `service_opts_fields/0`, so this is honored
+    when the context carries live service opts (calling `stream_download/2`
+    directly) but not when the context is rebuilt from a blob record via
+    `AshStorage.Operations.stream_download/2`, which always uses the default.
   """
 
   @behaviour AshStorage.Service
+
+  @default_chunk_size 65_536
 
   @impl true
   def service_opts_fields do
@@ -59,6 +66,21 @@ defmodule AshStorage.Service.Disk do
          :ok <- verify_md5(data, ctx.expected_md5) do
       {:ok, data}
     else
+      {:error, :enoent} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # sobelow_skip ["Traversal.FileModule"]
+  @impl true
+  def stream_download(key, %AshStorage.Service.Context{} = ctx) do
+    root = Keyword.fetch!(ctx.service_opts, :root)
+    path = Path.join(root, key)
+    chunk_size = Keyword.get(ctx.service_opts, :chunk_size, @default_chunk_size)
+
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :directory}} -> {:error, :eisdir}
+      {:ok, %File.Stat{}} -> {:ok, File.stream!(path, chunk_size)}
       {:error, :enoent} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end

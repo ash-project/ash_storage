@@ -47,6 +47,45 @@ defmodule AshStorage.Service.DiskTest do
     end
   end
 
+  describe "stream_download/2" do
+    test "streams an existing file in chunks", %{ctx: ctx, root: root} do
+      content = :crypto.strong_rand_bytes(200_000)
+      File.write!(Path.join(root, "big.bin"), content)
+
+      assert {:ok, stream} = Disk.stream_download("big.bin", ctx)
+      assert %File.Stream{} = stream
+      chunks = Enum.to_list(stream)
+      assert length(chunks) > 1
+      assert Enum.all?(chunks, &(byte_size(&1) <= 65_536))
+      assert IO.iodata_to_binary(chunks) == content
+    end
+
+    test "honors the :chunk_size service opt", %{root: root} do
+      ctx = Context.new(root: root, base_url: "http://localhost:4000/storage", chunk_size: 4)
+      File.write!(Path.join(root, "test.txt"), "hello world")
+
+      assert {:ok, stream} = Disk.stream_download("test.txt", ctx)
+      assert Enum.to_list(stream) == ["hell", "o wo", "rld"]
+    end
+
+    test "yields no chunks for an empty file", %{ctx: ctx, root: root} do
+      File.write!(Path.join(root, "empty.txt"), "")
+
+      assert {:ok, stream} = Disk.stream_download("empty.txt", ctx)
+      assert Enum.to_list(stream) == []
+    end
+
+    test "returns not_found for a missing file", %{ctx: ctx} do
+      assert {:error, :not_found} = Disk.stream_download("nonexistent.txt", ctx)
+    end
+
+    test "returns eisdir for a directory key, matching download/2", %{ctx: ctx, root: root} do
+      File.mkdir_p!(Path.join(root, "a"))
+      assert {:error, :eisdir} = Disk.stream_download("a", ctx)
+      assert {:error, :eisdir} = Disk.download("a", ctx)
+    end
+  end
+
   describe "delete/2" do
     test "deletes an existing file", %{ctx: ctx, root: root} do
       path = Path.join(root, "test.txt")

@@ -63,6 +63,36 @@ defmodule AshStorage.Service do
               {:ok, binary()} | {:error, term()}
 
   @doc """
+  Stream a file's bytes from the storage service.
+
+  Returns an enumerable of binary chunks which, concatenated, are exactly the
+  bytes `download/2` would return. Lets callers forward large objects to a
+  client without holding the whole body in memory.
+
+  This callback is optional. Call
+  `AshStorage.Operations.stream_download_from_service/3` rather than invoking it
+  directly — services that don't implement it fall back to `download/2` there
+  and yield the body as a single chunk.
+
+  The context's `:expected_md5` is not honored: a service handing out chunks
+  cannot hash the body before the caller has seen part of it. Use `download/2`
+  when the integrity check matters.
+
+  `{:ok, enumerable}` means the object was confirmed to exist at call time, not
+  that every chunk is guaranteed to arrive — enumeration can still raise if the
+  object is removed mid-stream. Callers that have already begun writing a
+  response should be prepared for that.
+
+  Some implementations return an enumerable that must be consumed in the
+  process that called `stream_download/2` (e.g. one backed by a network
+  response streamed into the calling process's mailbox) — callers should not
+  hand the returned enumerable to another process. Check the implementing
+  service's documentation.
+  """
+  @callback stream_download(key(), Context.t()) ::
+              {:ok, Enumerable.t()} | {:error, term()}
+
+  @doc """
   Delete a file from the storage service.
   """
   @callback delete(key(), Context.t()) :: :ok | {:error, term()}
@@ -149,5 +179,6 @@ defmodule AshStorage.Service do
                       delete_many: 2,
                       direct_upload: 2,
                       service_opts_fields: 0,
-                      head: 2
+                      head: 2,
+                      stream_download: 2
 end
