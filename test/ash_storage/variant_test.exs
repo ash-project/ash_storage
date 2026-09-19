@@ -39,6 +39,23 @@ defmodule AshStorage.VariantTest do
       assert data == "HELLO WORLD"
     end
 
+    test "the service's upload/3 receives the variant's content_type and filename" do
+      Application.put_env(:ash_storage, AshStorage.Test.VariantPost,
+        storage: [service: {AshStorage.Test.ContextCapturingService, []}]
+      )
+
+      on_exit(fn -> Application.delete_env(:ash_storage, AshStorage.Test.VariantPost) end)
+
+      post = create_post_with_document()
+      blob = post.document.blob
+      eager = Enum.find(blob.variants, &(&1.variant_name == "eager_uppercase"))
+
+      ctx = AshStorage.Test.ContextCapturingService.captured_context(eager.key)
+      assert ctx != nil
+      assert ctx.content_type == "text/plain"
+      assert ctx.filename == "eager_uppercase_test.txt"
+    end
+
     test "passes opts to transform" do
       post = create_post_with_document()
       blob = post.document.blob

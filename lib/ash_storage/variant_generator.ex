@@ -97,7 +97,16 @@ defmodule AshStorage.VariantGenerator do
         attachment: attachment_def
       )
 
-    ctx = Context.put_expected_md5(ctx, checksum)
+    # Mirrors what attach.ex and handle_file_argument.ex already do for the
+    # primary upload: without this, ctx.content_type and ctx.filename are
+    # nil for every variant, so services that forward them onto the
+    # underlying object (e.g. AshStorage.Service.S3 setting the Content-Type
+    # header) silently lose them for variants specifically.
+    ctx =
+      ctx
+      |> Context.put_expected_md5(checksum)
+      |> Context.put_blob_metadata(content_type: variant_content_type, filename: variant_filename)
+
     blob_resource = Info.storage_blob_resource!(resource)
 
     with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
