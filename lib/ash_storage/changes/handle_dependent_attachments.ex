@@ -23,7 +23,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
       changeset =
         Ash.Changeset.after_action(changeset, fn changeset, record ->
           attachments_by_name = changeset.context[:__ash_storage_attachments__] || %{}
-          handle_dependent(record, attachments_by_name, async?)
+          handle_dependent(record, attachments_by_name, async?, context_opts)
         end)
 
       if async? do
@@ -92,11 +92,11 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     end)
   end
 
-  defp handle_dependent(record, attachments_by_name, async?) do
+  defp handle_dependent(record, attachments_by_name, async?, context_opts) do
     resource = record.__struct__
     attachment_defs = AshStorage.Info.attachments(resource)
 
-    case process_attachments(attachment_defs, attachments_by_name, async?) do
+    case process_attachments(attachment_defs, attachments_by_name, async?, context_opts) do
       {:ok, result} ->
         if async? do
           trigger_purge_jobs(result)
@@ -110,26 +110,26 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     end
   end
 
-  defp process_attachments(attachment_defs, attachments_by_name, async?) do
+  defp process_attachments(attachment_defs, attachments_by_name, async?, context_opts) do
     Enum.reduce_while(attachment_defs, {:ok, []}, fn attachment_def, {:ok, acc} ->
       found_attachments = Map.get(attachments_by_name, attachment_def.name, [])
 
       case attachment_def.dependent do
         :purge ->
           if async? do
-            case mark_for_purge(found_attachments) do
+            case mark_for_purge(found_attachments, context_opts) do
               {:ok, blobs} -> {:cont, {:ok, acc ++ blobs}}
               {:error, error} -> {:halt, {:error, error}}
             end
           else
-            case destroy_and_collect_keys(found_attachments) do
+            case destroy_and_collect_keys(found_attachments, context_opts) do
               {:ok, purge_keys} -> {:cont, {:ok, acc ++ purge_keys}}
               {:error, error} -> {:halt, {:error, error}}
             end
           end
 
         :detach ->
-          case destroy_attachment_records(found_attachments) do
+          case destroy_attachment_records(found_attachments, context_opts) do
             {:ok, _} -> {:cont, {:ok, acc}}
             {:error, error} -> {:halt, {:error, error}}
           end
@@ -140,15 +140,23 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     end)
   end
 
-  defp mark_for_purge(attachments) do
+  defp mark_for_purge(attachments, context_opts) do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
-      with {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
+      with {:ok, _} <-
+             Ash.destroy(
+               att,
+               Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+             ),
            {:ok, blob} <-
-             Ash.update(blob, %{pending_purge: true},
-               action: :mark_for_purge,
-               return_record?: true
+             Ash.update(
+               blob,
+               %{pending_purge: true},
+               Keyword.merge(context_opts,
+                 action: :mark_for_purge,
+                 return_record?: true
+               )
              ) do
         {:cont, {:ok, [blob | acc]}}
       else
@@ -157,7 +165,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     end)
   end
 
-  defp destroy_and_collect_keys(attachments) do
+  defp destroy_and_collect_keys(attachments, context_opts) do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
       blob = att.blob
       # Capture service info before destroying the blob
@@ -165,8 +173,16 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
       loaded_blob = Ash.load!(blob, :parsed_service_opts)
       ctx = AshStorage.Service.Context.new(loaded_blob.parsed_service_opts || [])
 
-      with {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
-           {:ok, _} <- Ash.destroy(blob, action: :destroy, return_destroyed?: true) do
+      with {:ok, _} <-
+             Ash.destroy(
+               att,
+               Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+             ),
+           {:ok, _} <-
+             Ash.destroy(
+               blob,
+               Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+             ) do
         {:cont, {:ok, [{service_mod, ctx, blob.key} | keys_acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}
@@ -174,9 +190,12 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
     end)
   end
 
-  defp destroy_attachment_records(attachments) do
+  defp destroy_attachment_records(attachments, context_opts) do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      case Ash.destroy(att, action: :destroy, return_destroyed?: true) do
+      case Ash.destroy(
+             att,
+             Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+           ) do
         {:ok, destroyed} -> {:cont, {:ok, [destroyed | acc]}}
         {:error, error} -> {:halt, {:error, error}}
       end

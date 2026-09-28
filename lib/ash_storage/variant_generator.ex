@@ -75,7 +75,8 @@ defmodule AshStorage.VariantGenerator do
          resource,
          service_mod,
          service_opts,
-         attachment_def
+         attachment_def,
+         action_opts \\ []
        ) do
     key = AshStorage.resolve_variant_key(source_blob.key)
     checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
@@ -126,7 +127,7 @@ defmodule AshStorage.VariantGenerator do
         }
         |> Map.merge(extra_blob_attrs)
 
-      Ash.create(blob_resource, blob_attrs, action: :create_variant)
+      Ash.create(blob_resource, blob_attrs, Keyword.merge(action_opts, action: :create_variant))
     end
   end
 
