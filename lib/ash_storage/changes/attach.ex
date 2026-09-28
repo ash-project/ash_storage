@@ -48,7 +48,7 @@ defmodule AshStorage.Changes.Attach do
                {:ok, attachment} <-
                  create_attachment(record, attachment_def, blob, context_opts),
                :ok <- run_eager_variants(blob, attachment_def, resource),
-               {:ok, blob} <- store_oban_variants(blob, attachment_def, resource) do
+               {:ok, blob} <- store_oban_variants(blob, attachment_def, resource, context_opts) do
             if attach_context[:has_oban_analyzers?] do
               AshOban.run_trigger(blob, :run_pending_analyzers, tenant: changeset.tenant)
             end
@@ -508,7 +508,7 @@ defmodule AshStorage.Changes.Attach do
     |> Enum.any?(&(&1.generate == :oban))
   end
 
-  defp store_oban_variants(blob, attachment_def, resource) do
+  defp store_oban_variants(blob, attachment_def, resource, context_opts) do
     oban_variants =
       (attachment_def.variants || [])
       |> Enum.filter(&(&1.generate == :oban))
@@ -533,7 +533,13 @@ defmodule AshStorage.Changes.Attach do
 
       metadata = Map.put(blob.metadata || %{}, "__pending_variants__", pending_variants)
 
-      Ash.update(blob, %{metadata: metadata, pending_variants: true}, action: :update_metadata)
+      Ash.update(
+        blob,
+        %{metadata: metadata, pending_variants: true},
+        Keyword.merge(context_opts,
+          action: :update_metadata
+        )
+      )
     end
   end
 end

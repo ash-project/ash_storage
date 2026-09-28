@@ -49,7 +49,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
             # On update, replace existing attachment; on create, skip
             with {:ok, _} <- maybe_replace_on_update(changeset, record, attachment_def, context),
-                 {:ok, attachment} <- create_attachment(record, attachment_def, blob) do
+                 {:ok, attachment} <-
+                   create_attachment(record, attachment_def, blob, context_opts) do
               # Now that we have the record ID, update write_target for oban analyzers
               if context[:has_oban_analyzers?] do
                 update_oban_write_targets(blob, record, context_opts)
@@ -76,7 +77,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   end
 
   defp maybe_replace_on_update(_changeset, record, attachment_def, context) do
-    maybe_replace_existing(record, attachment_def, context[:service_mod], context[:ctx])
+    maybe_replace_existing(record, attachment_def, context[:service_mod], context)
   end
 
   defp upload_blob(resource, attachment_name, file, changeset, context_opts) do
@@ -88,7 +89,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
       key = AshStorage.resolve_key(attachment_def, ctx, changeset)
 
       with {:ok, blob} <-
-             upload_and_create_blob(resource, service_mod, ctx, file,
+             upload_and_create_blob(resource, service_mod, ctx, file, context_opts,
                key: key,
                filename: filename,
                content_type: content_type
@@ -313,7 +314,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     end
   end
 
-  defp upload_and_create_blob(resource, service_mod, ctx, io, opts) do
+  defp upload_and_create_blob(resource, service_mod, ctx, io, context_opts, opts) do
     filename = Keyword.fetch!(opts, :filename)
     content_type = Keyword.get(opts, :content_type, "application/octet-stream")
 
@@ -346,7 +347,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
         }
         |> Map.merge(extra_blob_attrs)
 
-      Ash.create(blob_resource, blob_attrs, action: :create)
+      Ash.create(blob_resource, blob_attrs, Keyword.merge(context_opts, action: :create))
     end
   end
 
@@ -413,10 +414,13 @@ defmodule AshStorage.Changes.HandleFileArgument do
   defp maybe_cleanup_tempfile(_data, path), do: File.rm(path)
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp maybe_replace_existing(record, %{type: :one} = attachment_def, service_mod, ctx) do
-    case find_attachments(record, attachment_def) do
+  defp maybe_replace_existing(record, %{type: :one} = attachment_def, service_mod, context) do
+    ctx = context[:ctx]
+    context_opts = Ash.Context.to_opts(context)
+
+    case find_attachments(record, attachment_def, context_opts) do
       {:ok, []} -> {:ok, :noop}
-      {:ok, existing} -> purge_attachments(existing, service_mod, ctx)
+      {:ok, existing} -> purge_attachments(existing, service_mod, ctx, context_opts)
       {:error, _} = error -> error
     end
   end
@@ -424,7 +428,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   defp maybe_replace_existing(_record, %{type: :many}, _service_mod, _ctx), do: {:ok, :noop}
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp create_attachment(record, attachment_def, blob) do
+  defp create_attachment(record, attachment_def, blob, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -452,11 +456,11 @@ defmodule AshStorage.Changes.HandleFileArgument do
         }
       end
 
-    Ash.create(attachment_resource, params, action: :create)
+    Ash.create(attachment_resource, params, Keyword.merge(context_opts, action: :create))
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def) do
+  defp find_attachments(record, attachment_def, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -480,16 +484,24 @@ defmodule AshStorage.Changes.HandleFileArgument do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read()
+    |> Ash.read(context_opts)
   end
 
-  defp purge_attachments(attachments, service_mod, ctx) do
+  defp purge_attachments(attachments, service_mod, ctx, context_opts) do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
       with :ok <- service_mod.delete(blob.key, ctx),
-           {:ok, _} <- Ash.destroy(att, action: :destroy, return_destroyed?: true),
-           {:ok, _} <- Ash.destroy(blob, action: :destroy, return_destroyed?: true) do
+           {:ok, _} <-
+             Ash.destroy(
+               att,
+               Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+             ),
+           {:ok, _} <-
+             Ash.destroy(
+               blob,
+               Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+             ) do
         {:cont, {:ok, [att | acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}
