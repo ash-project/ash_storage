@@ -55,7 +55,7 @@ has seen part of it, for the same reason the proxy plug doesn't verify.
 
 ## When `head/2` returns no usable checksum
 
-Two real-world cases produce a `head/2` response with `content_md5: nil`:
+Three real-world cases produce a `head/2` response with `content_md5: nil`:
 
 - **S3 multipart objects.** The ETag has a `-N` suffix
   (`"abc123-2"`). S3's multipart ETag is `md5(concat(part_md5s)) + "-N"`,
@@ -65,6 +65,12 @@ Two real-world cases produce a `head/2` response with `content_md5: nil`:
   Older AshStorage versions or third-party tools may not have set the
   property. Azure returns `Content-MD5` in the response only when the
   property was set at upload.
+- **Google Drive native document types** (Docs, Sheets, Slides, and the
+  rest of the `application/vnd.google-apps.*` family) have no fixed binary
+  representation, so Drive reports no `md5Checksum` for them at all. This
+  doesn't affect files `AshStorage.Service.GoogleDrive.upload/3` itself
+  creates — those always carry a real MIME type and a real `md5Checksum` —
+  only Google-native files attached via a blob record created out of band.
 
 When `head/2` returns no MD5, AttachBlob falls back to a tier-3 decision:
 

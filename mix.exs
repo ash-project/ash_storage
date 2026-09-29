@@ -100,6 +100,7 @@ defmodule AshStorage.MixProject do
           AshStorage.Service,
           AshStorage.Service.AzureBlob,
           AshStorage.Service.Disk,
+          AshStorage.Service.GoogleDrive,
           AshStorage.Service.S3,
           AshStorage.Service.Test
         ],
@@ -154,6 +155,7 @@ defmodule AshStorage.MixProject do
       {:mime, "~> 2.0", optional: true},
       {:req, "~> 0.5", optional: true},
       {:req_s3, "~> 0.2", optional: true},
+      {:goth, "~> 1.4", optional: true},
       {:ash_oban, "~> 0.7", optional: true},
       {:ash_postgres, "~> 2.0", only: [:dev, :test]},
       # dev/test dependencies

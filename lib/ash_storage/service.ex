@@ -82,6 +82,12 @@ defmodule AshStorage.Service do
   that every chunk is guaranteed to arrive — enumeration can still raise if the
   object is removed mid-stream. Callers that have already begun writing a
   response should be prepared for that.
+
+  Some implementations return an enumerable that must be consumed in the
+  process that called `stream_download/2` (e.g. one backed by a network
+  response streamed into the calling process's mailbox) — callers should not
+  hand the returned enumerable to another process. Check the implementing
+  service's documentation.
   """
   @callback stream_download(key(), Context.t()) ::
               {:ok, Enumerable.t()} | {:error, term()}

@@ -14,6 +14,11 @@
   `download/2` for services that don't implement it
 - `AshStorage.Service.Disk` streams from the filesystem via `File.stream!/2`,
   with a `:chunk_size` service option (default `65_536`)
+- `AshStorage.Service.GoogleDrive`, a Google Workspace Shared Drive backend
+  built on `req` + `goth`, adapted from a production Drive integration.
+  Implements `stream_download/2` via Req's `into: :self`; note its chunks
+  must be consumed in the calling process. Does not implement
+  `direct_upload/2`
 
 ### Changed
 
