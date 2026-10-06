@@ -282,9 +282,8 @@ Implement the `AshStorage.Service` behaviour to add custom backends.
 
 ### Public S3 URLs
 
-If your files are served from a CDN or a custom domain, such as CloudFront in
-front of S3 or an R2 custom domain, set `public_base_url` and AshStorage will
-build file URLs from it:
+Set `public_base_url` to serve files from a CDN or a custom domain, such as
+CloudFront or an R2 custom domain:
 
 ```elixir
 storage do
@@ -295,18 +294,9 @@ storage do
 end
 ```
 
-With this setup, a file with the key `photo.jpg` gets the URL
-`https://cdn.example.com/uploads/photo.jpg`. The base URL can include a path,
-like `https://cdn.example.com/media`. The bucket name is not added, so include
-it in the base URL if your CDN needs it.
-
-Only public file URLs change. Uploads, downloads, deletes, direct uploads, and
-presigned URLs keep talking to S3 directly. The setting is not saved on blob
-records, so you can change it at any time and existing files will use the new
-URL right away.
-
-This option only changes the URL. Your CDN or custom domain still needs to be
-set up to serve files from the bucket.
+A file with the key `photo.jpg` then gets the URL
+`https://cdn.example.com/uploads/photo.jpg`. The bucket name is not added.
+Presigned URLs, uploads, and downloads still use the S3 endpoint.
 
 ### Streaming downloads
 

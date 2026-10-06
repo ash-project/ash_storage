@@ -36,11 +36,8 @@ if Code.ensure_loaded?(ReqS3) do
     - `:secret_access_key_env` - environment variable to read the secret
       access key from (default: `"AWS_SECRET_ACCESS_KEY"`)
     - `:endpoint_url` - custom endpoint URL for S3-compatible services (e.g. MinIO, Tigris)
-    - `:public_base_url` - base URL for public file links, such as a CDN or a
-      custom domain. When set, `url/2` returns this URL followed by the prefix
-      and key, without the bucket name. It is ignored for presigned URLs,
-      and every other request still goes to `:endpoint_url`. Not persisted on
-      blob records, so changing it updates the links of existing files
+    - `:public_base_url` - base URL for file URLs, such as a CDN or custom
+      domain. The bucket name is not added. Not used for presigned URLs
     - `:prefix` - optional key prefix (e.g. `"uploads/"`)
     - `:decode_body` - opt back into Req's content-type response decoding on
       `download/2`. Defaults to `false`; see the `AshStorage.Service`
