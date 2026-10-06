@@ -298,8 +298,7 @@ end
 With this setup, a file with the key `photo.jpg` gets the URL
 `https://cdn.example.com/uploads/photo.jpg`. The base URL can include a path,
 like `https://cdn.example.com/media`. The bucket name is not added, so include
-it in the base URL if your CDN needs it. Spaces and other special characters in
-the prefix and key are encoded for you.
+it in the base URL if your CDN needs it.
 
 Only public file URLs change. Uploads, downloads, deletes, direct uploads, and
 presigned URLs keep talking to S3 directly. The setting is not saved on blob

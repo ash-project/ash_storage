@@ -32,13 +32,6 @@ defmodule AshStorage.Service.S3UrlTest do
     end
   end
 
-  test "public URLs encode the prefix and key but keep the slashes" do
-    ctx = context(public_base_url: "https://cdn.example.com", prefix: "food photos/")
-
-    assert S3.url("nested/café +?#%.png", ctx) ==
-             "https://cdn.example.com/food%20photos/nested/caf%C3%A9%20%2B%3F%23%25.png"
-  end
-
   test "presigned URLs ignore the public base URL" do
     ctx =
       context(

@@ -37,8 +37,8 @@ if Code.ensure_loaded?(ReqS3) do
       access key from (default: `"AWS_SECRET_ACCESS_KEY"`)
     - `:endpoint_url` - custom endpoint URL for S3-compatible services (e.g. MinIO, Tigris)
     - `:public_base_url` - base URL for public file links, such as a CDN or a
-      custom domain. When set, `url/2` returns this URL followed by the encoded
-      prefix and key, without the bucket name. It is ignored for presigned URLs,
+      custom domain. When set, `url/2` returns this URL followed by the prefix
+      and key, without the bucket name. It is ignored for presigned URLs,
       and every other request still goes to `:endpoint_url`. Not persisted on
       blob records, so changing it updates the links of existing files
     - `:prefix` - optional key prefix (e.g. `"uploads/"`)
@@ -225,10 +225,7 @@ if Code.ensure_loaded?(ReqS3) do
             "#{endpoint}/#{bucket}/#{full_key}"
 
           base_url ->
-            # Encode spaces and other special characters, but keep the slashes
-            # so the prefix and key still read as a path.
-            path = URI.encode(full_key, &(&1 == ?/ or URI.char_unreserved?(&1)))
-            String.trim_trailing(base_url, "/") <> "/" <> path
+            "#{String.trim_trailing(base_url, "/")}/#{full_key}"
         end
       end
     end
