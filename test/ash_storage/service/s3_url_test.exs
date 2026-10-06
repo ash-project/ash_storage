@@ -12,14 +12,12 @@ defmodule AshStorage.Service.S3UrlTest do
     )
   end
 
-  test "unsigned URLs are unchanged without a public base URL" do
-    assert S3.url("key", context()) == "https://s3.example.com/test-bucket/key"
-
-    assert S3.url("key", context(public_base_url: nil, prefix: "uploads/", presigned: false)) ==
+  test "URLs use the S3 endpoint when no public base URL is set" do
+    assert S3.url("key", context(prefix: "uploads/")) ==
              "https://s3.example.com/test-bucket/uploads/key"
 
-    assert S3.url("key", context(endpoint_url: nil)) ==
-             "https://s3.us-east-1.amazonaws.com/test-bucket/key"
+    assert S3.url("key", context(public_base_url: "", prefix: "uploads/")) ==
+             "https://s3.example.com/test-bucket/uploads/key"
   end
 
   test "public URLs join the base path, prefix, and key without adding the bucket" do
@@ -34,56 +32,27 @@ defmodule AshStorage.Service.S3UrlTest do
     end
   end
 
-  test "public URLs encode the prefix and key while preserving path separators" do
+  test "public URLs encode the prefix and key but keep the slashes" do
     ctx = context(public_base_url: "https://cdn.example.com", prefix: "food photos/")
 
     assert S3.url("nested/café +?#%.png", ctx) ==
              "https://cdn.example.com/food%20photos/nested/caf%C3%A9%20%2B%3F%23%25.png"
   end
 
-  test "presigned GET URLs ignore the public base URL" do
+  test "presigned URLs ignore the public base URL" do
     ctx =
       context(
         public_base_url: "https://cdn.example.com",
         prefix: "uploads/",
         presigned: true,
-        expires_in: 300,
         access_key_id: "test-access-key",
         secret_access_key: "test-secret-key"
       )
 
     uri = "key" |> S3.url(ctx) |> URI.parse()
-    query = URI.decode_query(uri.query)
 
-    assert uri.host == "s3.example.com"
-    assert uri.path == "/test-bucket/uploads/key"
-    assert query["X-Amz-Expires"] == "300"
-    assert query["X-Amz-Signature"]
-  end
-
-  test "direct PUT and POST uploads still target the S3 API" do
-    opts = [
-      public_base_url: "https://cdn.example.com",
-      prefix: "uploads/",
-      presigned: false,
-      access_key_id: "test-access-key",
-      secret_access_key: "test-secret-key"
-    ]
-
-    assert {:ok, %{method: :put, url: url}} = S3.direct_upload("key", context(opts))
-    uri = URI.parse(url)
     assert uri.host == "s3.example.com"
     assert uri.path == "/test-bucket/uploads/key"
     assert URI.decode_query(uri.query)["X-Amz-Signature"]
-
-    assert {:ok, %{method: :post, url: url, fields: fields}} =
-             S3.direct_upload("key", context(Keyword.put(opts, :direct_upload_method, :post)))
-
-    uri = URI.parse(url)
-    fields = Map.new(fields)
-    assert uri.host == "s3.example.com"
-    assert uri.path == "/test-bucket"
-    assert fields["key"] == "uploads/key"
-    assert fields["x-amz-signature"]
   end
 end

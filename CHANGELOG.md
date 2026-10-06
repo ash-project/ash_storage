@@ -4,7 +4,6 @@
 
 ### Added
 
-- S3 `:public_base_url` for unsigned URLs served from a separate public or CDN endpoint.
 - Initial project setup
 - Server-side checksum verification on upload via `Content-MD5` (S3, Azure)
 - `AshStorage.Service.Context.put_expected_md5/2` and `:expected_md5` field
@@ -15,6 +14,8 @@
   `download/2` for services that don't implement it
 - `AshStorage.Service.Disk` streams from the filesystem via `File.stream!/2`,
   with a `:chunk_size` service option (default `65_536`)
+- `AshStorage.Service.S3` accepts a `:public_base_url` option, so public file
+  URLs can point at a CDN or a custom domain instead of the S3 endpoint
 
 ### Changed
 

@@ -282,29 +282,32 @@ Implement the `AshStorage.Service` behaviour to add custom backends.
 
 ### Public S3 URLs
 
-Use `public_base_url` when public files are served through a different endpoint,
-for example CloudFront in front of S3 or an R2 custom domain:
+If your files are served from a CDN or a custom domain, such as CloudFront in
+front of S3 or an R2 custom domain, set `public_base_url` and AshStorage will
+build file URLs from it:
 
 ```elixir
 storage do
   service {AshStorage.Service.S3,
     bucket: "my-bucket",
-    endpoint_url: "https://s3.us-east-1.amazonaws.com",
-    public_base_url: "https://cdn.example.com",
     prefix: "uploads/",
-    presigned: false}
+    public_base_url: "https://cdn.example.com"}
 end
 ```
 
-An object with key `photo.jpg` gets the URL `https://cdn.example.com/uploads/photo.jpg`.
-The base URL can include a path; the bucket name is not added automatically.
-The prefix and key are URL-encoded, preserving path separators.
+With this setup, a file with the key `photo.jpg` gets the URL
+`https://cdn.example.com/uploads/photo.jpg`. The base URL can include a path,
+like `https://cdn.example.com/media`. The bucket name is not added, so include
+it in the base URL if your CDN needs it. Spaces and other special characters in
+the prefix and key are encoded for you.
 
-Uploads, downloads, deletes, direct uploads, and presigned GET URLs continue using
-the S3 API endpoint. Without `public_base_url`, URL generation is unchanged. The
-option is read from the current service configuration, not persisted on blobs.
-The public endpoint must already serve the objects; this option does not change
-access permissions, object metadata, or caching headers.
+Only public file URLs change. Uploads, downloads, deletes, direct uploads, and
+presigned URLs keep talking to S3 directly. The setting is not saved on blob
+records, so you can change it at any time and existing files will use the new
+URL right away.
+
+This option only changes the URL. Your CDN or custom domain still needs to be
+set up to serve files from the bucket.
 
 ### Streaming downloads
 
