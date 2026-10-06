@@ -280,6 +280,32 @@ AshStorage ships with:
 
 Implement the `AshStorage.Service` behaviour to add custom backends.
 
+### Public S3 URLs
+
+Use `public_base_url` when public files are served through a different endpoint,
+for example CloudFront in front of S3 or an R2 custom domain:
+
+```elixir
+storage do
+  service {AshStorage.Service.S3,
+    bucket: "my-bucket",
+    endpoint_url: "https://s3.us-east-1.amazonaws.com",
+    public_base_url: "https://cdn.example.com",
+    prefix: "uploads/",
+    presigned: false}
+end
+```
+
+An object with key `photo.jpg` gets the URL `https://cdn.example.com/uploads/photo.jpg`.
+The base URL can include a path; the bucket name is not added automatically.
+The prefix and key are URL-encoded, preserving path separators.
+
+Uploads, downloads, deletes, direct uploads, and presigned GET URLs continue using
+the S3 API endpoint. Without `public_base_url`, URL generation is unchanged. The
+option is read from the current service configuration, not persisted on blobs.
+The public endpoint must already serve the objects; this option does not change
+access permissions, object metadata, or caching headers.
+
 ### Streaming downloads
 
 `AshStorage.Service.download/2` returns the whole object as one binary. For

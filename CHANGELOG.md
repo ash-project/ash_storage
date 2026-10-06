@@ -4,6 +4,7 @@
 
 ### Added
 
+- S3 `:public_base_url` for unsigned URLs served from a separate public or CDN endpoint.
 - Initial project setup
 - Server-side checksum verification on upload via `Content-MD5` (S3, Azure)
 - `AshStorage.Service.Context.put_expected_md5/2` and `:expected_md5` field

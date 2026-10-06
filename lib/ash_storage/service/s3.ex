@@ -36,6 +36,10 @@ if Code.ensure_loaded?(ReqS3) do
     - `:secret_access_key_env` - environment variable to read the secret
       access key from (default: `"AWS_SECRET_ACCESS_KEY"`)
     - `:endpoint_url` - custom endpoint URL for S3-compatible services (e.g. MinIO, Tigris)
+    - `:public_base_url` - optional base URL for unsigned public/CDN URLs. Appends
+      the URL-encoded prefix and key without adding the bucket name. Only used
+      when `:presigned` is `false` (the default); storage operations and presigned
+      URLs still use `:endpoint_url`. Not persisted on blob records
     - `:prefix` - optional key prefix (e.g. `"uploads/"`)
     - `:decode_body` - opt back into Req's content-type response decoding on
       `download/2`. Defaults to `false`; see the `AshStorage.Service`
@@ -213,9 +217,16 @@ if Code.ensure_loaded?(ReqS3) do
             raise ArgumentError, "could not generate S3 presigned URL: #{inspect(reason)}"
         end
       else
-        bucket = Keyword.fetch!(opts, :bucket)
-        endpoint = endpoint_url(opts)
-        "#{endpoint}/#{bucket}/#{full_key}"
+        case Keyword.get(opts, :public_base_url) do
+          nil ->
+            bucket = Keyword.fetch!(opts, :bucket)
+            endpoint = endpoint_url(opts)
+            "#{endpoint}/#{bucket}/#{full_key}"
+
+          base_url ->
+            path = URI.encode(full_key, &(&1 == ?/ or URI.char_unreserved?(&1)))
+            String.trim_trailing(base_url, "/") <> "/" <> path
+        end
       end
     end
 
