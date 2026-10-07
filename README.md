@@ -280,6 +280,24 @@ AshStorage ships with:
 
 Implement the `AshStorage.Service` behaviour to add custom backends.
 
+### Public S3 URLs
+
+Set `public_base_url` to serve files from a CDN or a custom domain, such as
+CloudFront or an R2 custom domain:
+
+```elixir
+storage do
+  service {AshStorage.Service.S3,
+    bucket: "my-bucket",
+    prefix: "uploads/",
+    public_base_url: "https://cdn.example.com"}
+end
+```
+
+A file with the key `photo.jpg` then gets the URL
+`https://cdn.example.com/uploads/photo.jpg`. The bucket name is not added.
+Presigned URLs, uploads, and downloads still use the S3 endpoint.
+
 ### Streaming downloads
 
 `AshStorage.Service.download/2` returns the whole object as one binary. For
