@@ -2,6 +2,8 @@ defmodule AshStorage.ObanIntegrationTest do
   use AshStorage.RepoCase, async: false
   use Oban.Testing, repo: AshStorage.TestRepo
 
+  require Ash.Query
+
   @moduletag :oban
 
   alias AshStorage.Test.{PgBlob, PgPost}
@@ -75,6 +77,23 @@ defmodule AshStorage.ObanIntegrationTest do
 
       # Run the purge_blob action directly
       Ash.destroy!(blob, action: :purge_blob)
+
+      refute AshStorage.Service.Test.exists?(blob.key)
+      assert {:error, _} = Ash.get(PgBlob, blob.id)
+    end
+
+    test "a bulk purge deletes each file from storage" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
+
+      AshStorage.Operations.detach(post, :cover_image)
+
+      assert %Ash.BulkResult{status: :success} =
+               PgBlob
+               |> Ash.Query.filter(id == ^blob.id)
+               |> Ash.bulk_destroy!(:purge_blob, %{}, strategy: [:atomic, :stream])
 
       refute AshStorage.Service.Test.exists?(blob.key)
       assert {:error, _} = Ash.get(PgBlob, blob.id)

@@ -31,7 +31,7 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
   end
 
   @impl true
-  def atomic(changeset, opts, context) do
-    {:ok, change(changeset, opts, context)}
+  def atomic(_changeset, _opts, _context) do
+    {:not_atomic, "deleting the file from storage requires the record being destroyed"}
   end
 end

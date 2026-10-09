@@ -130,7 +130,10 @@ defmodule AshStorage.BlobResource.Transformers.SetupBlob do
       {:ok, purge_change} =
         Ash.Resource.Builder.build_action_change(AshStorage.BlobResource.Changes.PurgeFile)
 
-      Ash.Resource.Builder.add_action(dsl_state, :destroy, :purge_blob, changes: [purge_change])
+      Ash.Resource.Builder.add_action(dsl_state, :destroy, :purge_blob,
+        changes: [purge_change],
+        require_atomic?: false
+      )
     end
   end
 
