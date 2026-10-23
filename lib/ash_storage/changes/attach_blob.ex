@@ -246,9 +246,9 @@ defmodule AshStorage.Changes.AttachBlob do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
-      with :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx),
-           {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts) do
+      with {:ok, _} <- Ash.destroy(att, destroy_opts),
+           {:ok, _} <- Ash.destroy(blob, destroy_opts),
+           :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx) do
         {:cont, {:ok, [att | acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}

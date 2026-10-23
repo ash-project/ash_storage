@@ -491,8 +491,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
 
-      with :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx),
-           {:ok, _} <-
+      with {:ok, _} <-
              Ash.destroy(
                att,
                Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
@@ -501,7 +500,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
              Ash.destroy(
                blob,
                Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
-             ) do
+             ),
+           :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx) do
         {:cont, {:ok, [att | acc]}}
       else
         {:error, error} -> {:halt, {:error, error}}

@@ -98,6 +98,36 @@ defmodule AshStorage.ObanIntegrationTest do
       refute AshStorage.Service.Test.exists?(blob.key)
       assert {:error, _} = Ash.get(PgBlob, blob.id)
     end
+
+    test "keeps the file when the blob can't be destroyed" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
+
+      # The attachment still references the blob, so the foreign key rejects the delete
+      assert {:error, _} = Ash.destroy(blob, action: :purge_blob)
+
+      assert AshStorage.Service.Test.exists?(blob.key)
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+    end
+
+    test "keeps the blob when its file can't be deleted" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
+
+      AshStorage.Operations.detach(post, :cover_image)
+
+      blob = Ash.Seed.update!(blob, %{service_name: AshStorage.Test.FailingDeleteService})
+
+      assert {:error, error} = Ash.destroy(blob, action: :purge_blob)
+      assert Exception.message(error) =~ "delete_failed"
+
+      assert AshStorage.Service.Test.exists?(blob.key)
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+    end
   end
 
   describe "async dependent purge" do
@@ -153,6 +183,36 @@ defmodule AshStorage.ObanIntegrationTest do
       # Blob still exists and is NOT marked for purge
       existing_blob = Ash.get!(PgBlob, blob.id)
       refute existing_blob.pending_purge
+    end
+  end
+
+  describe "purge action" do
+    test "destroys the records and deletes the file" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
+
+      assert {:ok, [_]} = AshStorage.Operations.purge(post, :cover_image)
+
+      refute AshStorage.Service.Test.exists?(blob.key)
+      assert {:error, _} = Ash.get(PgBlob, blob.id)
+    end
+
+    test "keeps the file when the blob can't be destroyed" do
+      post = create_post!()
+
+      # The eager variant's blob references this blob, so the foreign key rejects the delete
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "hello",
+          filename: "hello.txt",
+          content_type: "text/plain"
+        )
+
+      assert {:error, _} = AshStorage.Operations.purge(post, :cover_image)
+
+      assert AshStorage.Service.Test.exists?(blob.key)
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
     end
   end
 end
