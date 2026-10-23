@@ -64,5 +64,12 @@ defmodule AshStorage.Test.ConfigurablePost do
 
       change {AshStorage.Changes.AttachBlob, argument: :avatar_blob_id, attachment: :avatar}
     end
+
+    update :update_avatar_file do
+      require_atomic? false
+      argument :avatar_file, Ash.Type.File, allow_nil?: true
+
+      change {AshStorage.Changes.HandleFileArgument, argument: :avatar_file, attachment: :avatar}
+    end
   end
 end
