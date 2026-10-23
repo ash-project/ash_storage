@@ -67,12 +67,28 @@ defmodule AshStorage.PathTest do
     end
   end
 
-  describe "resolve_key_with_tenant/3 - no changeset" do
-    test "uses tenant as part of the key when path is nil" do
+  describe "resolve_key/3 without a changeset" do
+    test "calls the path function with a nil changeset" do
+      attachment_def = %AshStorage.AttachmentDefinition{
+        name: :avatar,
+        path: fn ctx, nil -> "#{ctx.tenant}/products/#{AshStorage.generate_key()}" end
+      }
+
+      ctx = AshStorage.Service.Context.new([], tenant: "org-123")
+
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
+
+      assert String.starts_with?(key, "org-123/products/")
+      refute key == "org-123/products/"
+    end
+
+    test "uses tenant from the context as part of the key when path is nil" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
 
-      key =
-        AshStorage.resolve_key_with_tenant(attachment_def, "org-123", AshStorage.Test.PathPost)
+      ctx =
+        AshStorage.Service.Context.new([], tenant: "org-123", resource: AshStorage.Test.PathPost)
+
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
 
       assert String.starts_with?(key, "org-123/")
       refute key == "org-123/"
@@ -81,19 +97,20 @@ defmodule AshStorage.PathTest do
     test "able to use tenant struct" do
       tenant = Ash.create!(AshStorage.Test.Tenant, %{})
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
+      ctx = AshStorage.Service.Context.new([], tenant: tenant, resource: AshStorage.Test.PathPost)
 
-      key =
-        AshStorage.resolve_key_with_tenant(attachment_def, tenant, AshStorage.Test.PathPost)
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
 
       tenant_id = Ash.ToTenant.to_tenant(tenant, AshStorage.Test.PathPost)
-      assert String.contains?(key, "#{tenant_id}/")
+      assert String.starts_with?(key, "#{tenant_id}/")
       refute key == "#{tenant_id}/"
     end
 
     test "returns just the key when path is nil and no tenant" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
+      ctx = AshStorage.Service.Context.new([], resource: AshStorage.Test.PathPost)
 
-      key = AshStorage.resolve_key_with_tenant(attachment_def, nil, AshStorage.Test.PathPost)
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
 
       refute String.contains?(key, "/")
       assert byte_size(key) == 56
@@ -101,8 +118,9 @@ defmodule AshStorage.PathTest do
 
     test "returns just key when tenant is empty string" do
       attachment_def = %AshStorage.AttachmentDefinition{name: :avatar}
+      ctx = AshStorage.Service.Context.new([], tenant: "", resource: AshStorage.Test.PathPost)
 
-      key = AshStorage.resolve_key_with_tenant(attachment_def, "", AshStorage.Test.PathPost)
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
 
       refute String.contains?(key, "/")
       assert byte_size(key) == 56
@@ -184,9 +202,24 @@ defmodule AshStorage.PathTest do
 
   ## Integration tests: direct_upload
   describe "prepare_direct_upload" do
-    test "with tenant" do
+    test "uses custom path from attachment definition" do
       {:ok, result} =
         Operations.prepare_direct_upload(AshStorage.Test.PathPost, :avatar,
+          filename: "photo.jpg",
+          content_type: "image/jpeg",
+          byte_size: 12_345,
+          actor: %{org_id: "org-42"},
+          tenant: "tenant-42"
+        )
+
+      assert result.blob.filename == "photo.jpg"
+      assert String.starts_with?(result.blob.key, "org-42/")
+      assert result.url =~ "/direct/org-42/"
+    end
+
+    test "uses tenant when there is no path specified" do
+      {:ok, result} =
+        Operations.prepare_direct_upload(AshStorage.Test.Post, :cover_image,
           filename: "photo.jpg",
           content_type: "image/jpeg",
           byte_size: 12_345,
@@ -197,9 +230,9 @@ defmodule AshStorage.PathTest do
       assert String.starts_with?(result.blob.key, "tenant-42/")
     end
 
-    test "no tenant" do
+    test "without path or tenant" do
       {:ok, result} =
-        Operations.prepare_direct_upload(AshStorage.Test.PathPost, :avatar,
+        Operations.prepare_direct_upload(AshStorage.Test.Post, :cover_image,
           filename: "photo.jpg",
           content_type: "image/jpeg",
           byte_size: 12_345

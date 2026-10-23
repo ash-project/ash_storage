@@ -15,9 +15,8 @@ defmodule AshStorage.Test.PathPost do
     attachment_resource(AshStorage.Test.PathAttachment)
 
     has_one_attached(:avatar) do
-      path fn _ctx, changeset ->
-        actor = changeset.context[:private][:actor]
-        org_id = actor && Map.get(actor, :org_id)
+      path fn ctx, _changeset ->
+        org_id = ctx.actor && Map.get(ctx.actor, :org_id)
         "#{org_id}/#{AshStorage.generate_key()}"
       end
     end

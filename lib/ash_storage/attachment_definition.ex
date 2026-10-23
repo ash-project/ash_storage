@@ -33,7 +33,7 @@ defmodule AshStorage.AttachmentDefinition do
     path: [
       type: {:fun, 2},
       doc:
-        "Specify a path for the key. Accepts a 2-arity function `fn ctx, changeset -> ...`. When path is not specified, falls back to the tenant if available.",
+        "Specify a path for the key. Accepts a 2-arity function `fn ctx, changeset -> ...`. The changeset is `nil` for direct uploads, which have no parent action, so use `ctx.actor` and `ctx.tenant` for a path that works in both. When path is not specified, falls back to the tenant if available.",
       required: false
     ]
   ]

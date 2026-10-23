@@ -206,6 +206,20 @@ end
 | `:byte_size` | no | `0` | Expected file size in bytes |
 | `:checksum` | no | `""` | Expected MD5 checksum |
 | `:metadata` | no | `%{}` | Custom metadata to store on the blob |
+| `:actor` | no | `nil` | The actor performing the operation |
+| `:tenant` | no | `nil` | The tenant |
+
+## Keys and `path`
+
+The blob's key is chosen when the upload is prepared, so it follows the attachment's `path` like a server-side attach does. There's no parent action yet, so the `path` function is called with a `nil` changeset. Use the context's `:actor` and `:tenant`, set from the options above, for a `path` that works in both flows:
+
+```elixir
+has_one_attached :cover_image do
+  path fn ctx, _changeset -> "#{ctx.tenant}/covers/#{AshStorage.generate_key()}" end
+end
+```
+
+Without a `path`, the key is prefixed with the tenant, if there is one.
 
 ## AshJsonApi
 

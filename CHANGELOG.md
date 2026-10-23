@@ -33,3 +33,13 @@
   setting the `Content-Type` header, for instance — silently lost them for
   variants specifically, uploading them as `binary/octet-stream` regardless
   of their real type.
+- `AshStorage.Operations.prepare_direct_upload/3` now uses the attachment's
+  `path` for the blob's key, as a server-side attach does. Previously it
+  ignored `path` and fell back to the tenant prefix. Direct uploads have no
+  parent action, so `path` is called with a `nil` changeset; use `ctx.actor`
+  and `ctx.tenant` for a `path` that works in both flows.
+
+### Removed
+
+- `AshStorage.resolve_key_with_tenant/3`. `AshStorage.resolve_key/3` accepts
+  a `nil` changeset and takes the tenant from the context instead.

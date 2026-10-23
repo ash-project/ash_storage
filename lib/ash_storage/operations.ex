@@ -68,6 +68,18 @@ defmodule AshStorage.Operations do
   The returned target is service-specific, such as an S3 presigned URL/form or an
   Azure Blob SAS URL. This stays as a standalone function since no parent record
   is involved yet.
+
+  The blob's key follows the attachment's `path`, called with a `nil` changeset.
+
+  ## Options
+
+  - `:filename` - (required) the original filename
+  - `:content_type` - MIME type (default: `"application/octet-stream"`)
+  - `:byte_size` - expected file size in bytes (default: `0`)
+  - `:checksum` - expected MD5 checksum (default: `""`)
+  - `:metadata` - additional metadata map
+  - `:actor` - the actor performing the operation
+  - `:tenant` - the tenant
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
@@ -83,8 +95,7 @@ defmodule AshStorage.Operations do
       checksum = Keyword.get(arg_opts, :checksum, "")
       metadata = Keyword.get(arg_opts, :metadata, %{})
 
-      key =
-        AshStorage.resolve_key_with_tenant(attachment_def, Keyword.get(opts, :tenant), resource)
+      key = AshStorage.resolve_key(attachment_def, ctx, nil)
 
       blob_resource = Info.storage_blob_resource!(resource)
 
