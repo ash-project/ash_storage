@@ -1,6 +1,8 @@
 defmodule AshStorage.DirectUploadTest do
   use ExUnit.Case, async: false
 
+  require Ash.Query
+
   alias AshStorage.Operations
 
   setup do
@@ -153,6 +155,54 @@ defmodule AshStorage.DirectUploadTest do
       # New attachment in place
       post = Ash.load!(post, cover_image: :blob)
       assert post.cover_image.blob.filename == "new.jpg"
+    end
+
+    test "re-attaching the already attached has_one blob is a no-op" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :cover_image, "cover data",
+          filename: "cover.jpg",
+          content_type: "image/jpeg"
+        )
+
+      post =
+        post
+        |> Ash.Changeset.for_update(:attach_blob, %{cover_image_blob_id: blob.id})
+        |> Ash.update!()
+
+      assert AshStorage.Service.Test.exists?(blob.key)
+      assert {:ok, _} = Ash.get(AshStorage.Test.Blob, blob.id)
+
+      post = Ash.load!(post, documents: :blob, cover_image: :blob)
+      assert post.cover_image.blob.id == blob.id
+
+      assert [_] =
+               AshStorage.Test.Attachment
+               |> Ash.Query.filter(post_id == ^post.id and name == "cover_image")
+               |> Ash.read!()
+    end
+
+    test "re-attaching an already attached has_many blob is a no-op" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        Operations.prepare_direct_upload(AshStorage.Test.Post, :documents,
+          filename: "doc.pdf",
+          byte_size: 100
+        )
+
+      AshStorage.Service.Test.upload(blob.key, "pdf", AshStorage.Service.Context.new([]))
+
+      for _ <- 1..2 do
+        post
+        |> Ash.Changeset.for_update(:attach_document_blob, %{document_blob_id: blob.id})
+        |> Ash.update!()
+      end
+
+      post = Ash.load!(post, documents: :blob)
+      assert [%{blob: %{id: blob_id}}] = post.documents
+      assert blob_id == blob.id
     end
 
     test "appends to has_many" do

@@ -15,7 +15,8 @@ defmodule AshStorage.Changes.AttachBlob do
       end
 
   For `has_one_attached`, replaces any existing attachment (purging the old file).
-  For `has_many_attached`, appends.
+  For `has_many_attached`, appends. Attaching a blob that is already attached is
+  a no-op.
 
   ## Options
 
@@ -60,11 +61,9 @@ defmodule AshStorage.Changes.AttachBlob do
              {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
              ctx = build_context(service_opts, resource, attachment_def, changeset),
              {:ok, blob} <- fetch_blob(resource, blob_id, context_opts),
-             {:ok, blob} <- verify_blob(blob, service_mod, ctx, context_opts),
-             {:ok, _} <-
-               maybe_replace_existing(record, attachment_def, service_mod, ctx, context_opts),
-             {:ok, attachment} <-
-               create_attachment(record, attachment_def, blob, context_opts) do
+             {:ok, existing} <- find_attachments(record, attachment_def, blob, context_opts),
+             {:ok, blob, attachment} <-
+               attach(record, attachment_def, blob, existing, service_mod, ctx, context_opts) do
           record =
             record
             |> Ash.Resource.put_metadata(:"#{attachment_name}_blob", blob)
@@ -139,20 +138,33 @@ defmodule AshStorage.Changes.AttachBlob do
   defp presence(value) when value in [nil, ""], do: nil
   defp presence(value), do: value
 
-  defp maybe_replace_existing(
-         record,
-         %{type: :one} = attachment_def,
-         service_mod,
-         ctx,
-         context_opts
-       ) do
-    case find_attachments(record, attachment_def, context_opts) do
-      {:ok, []} -> {:ok, :noop}
-      {:ok, existing} -> purge_attachments(existing, service_mod, ctx, context_opts)
+  # Attaching the blob that is already attached is a no-op, so that e.g. a form
+  # sending back the current blob id doesn't purge the file it points to.
+  defp attach(record, attachment_def, blob, existing, service_mod, ctx, context_opts) do
+    case Enum.split_with(existing, &(&1.blob_id == blob.id)) do
+      {[attachment | _], others} ->
+        with {:ok, _} <-
+               maybe_replace_existing(others, attachment_def, service_mod, ctx, context_opts) do
+          {:ok, blob, attachment}
+        end
+
+      {[], others} ->
+        with {:ok, blob} <- verify_blob(blob, service_mod, ctx, context_opts),
+             {:ok, _} <-
+               maybe_replace_existing(others, attachment_def, service_mod, ctx, context_opts),
+             {:ok, attachment} <- create_attachment(record, attachment_def, blob, context_opts) do
+          {:ok, blob, attachment}
+        end
     end
   end
 
-  defp maybe_replace_existing(_record, %{type: :many}, _service_mod, _ctx, _context_opts),
+  defp maybe_replace_existing([], _attachment_def, _service_mod, _ctx, _context_opts),
+    do: {:ok, :noop}
+
+  defp maybe_replace_existing(existing, %{type: :one}, service_mod, ctx, context_opts),
+    do: purge_attachments(existing, service_mod, ctx, context_opts)
+
+  defp maybe_replace_existing(_existing, %{type: :many}, _service_mod, _ctx, _context_opts),
     do: {:ok, :noop}
 
   # sobelow_skip ["DOS.BinToAtom"]
@@ -191,7 +203,7 @@ defmodule AshStorage.Changes.AttachBlob do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, context_opts) do
+  defp find_attachments(record, attachment_def, blob, context_opts) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -213,6 +225,13 @@ defmodule AshStorage.Changes.AttachBlob do
           record_type: to_string(resource),
           record_id: record_id
         ]
+      end
+
+    # has_many appends, so only an existing attachment of this blob matters
+    filter =
+      case attachment_def.type do
+        :one -> filter
+        :many -> [{:blob_id, blob.id} | filter]
       end
 
     attachment_resource
