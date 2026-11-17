@@ -27,6 +27,16 @@ defmodule AshStorage.MixProject do
     ]
   end
 
+  def cli do
+    [
+      preferred_envs: [
+        "test.setup": :test,
+        "test.reset": :test,
+        "test.generate_migrations": :test
+      ]
+    ]
+  end
+
   defp elixirc_paths(:test) do
     elixirc_paths(:dev) ++ ["test/support"]
   end
@@ -192,6 +202,8 @@ defmodule AshStorage.MixProject do
       "dev.generate_migrations":
         "ash_postgres.generate_migrations --domains Demo.Domain --snapshot-path dev/resource_snapshots --migration-path dev/repo/migrations",
       "dev.reset": ["ash_postgres.drop", "ash_postgres.create", "dev.migrate"],
+      "test.setup": ["ash_postgres.create", "ash_postgres.migrate"],
+      "test.reset": ["ash_postgres.drop", "test.setup"],
       "test.generate_migrations":
         "ash_postgres.generate_migrations --domains AshStorage.Test.PgDomain --snapshot-path priv/resource_snapshots/test_repo --migration-path priv/test_repo/migrations",
       docs: [
