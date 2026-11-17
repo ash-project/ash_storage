@@ -184,6 +184,90 @@ defmodule AshStorage.Service.DiskTest do
     end
   end
 
+  describe "unsafe keys" do
+    # The service root is a subdirectory of tmp_dir, so every escape target
+    # stays inside this test's tmp_dir.
+    setup %{tmp_dir: tmp_dir} do
+      root = Path.join(tmp_dir, "root")
+      File.mkdir_p!(root)
+
+      outside = Path.join(tmp_dir, "outside.txt")
+      File.write!(outside, "secret")
+
+      # A symlink inside the root that points back out of it
+      File.ln_s!(tmp_dir, Path.join(root, "escape"))
+
+      ctx = Context.new(root: root, base_url: "http://localhost:4000/storage")
+      {:ok, ctx: ctx, root: root, outside: outside}
+    end
+
+    test "upload/3 rejects them without writing outside the root", %{
+      ctx: ctx,
+      outside: outside,
+      tmp_dir: tmp_dir
+    } do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.upload(key, "overwritten", ctx), "key: #{key}"
+      end
+
+      assert File.read!(outside) == "secret"
+
+      assert {:error, :einval} = Disk.upload("../new_dir/file.txt", "data", ctx)
+      refute File.exists?(Path.join(tmp_dir, "new_dir"))
+    end
+
+    test "download/2 rejects them", %{ctx: ctx, outside: outside} do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.download(key, ctx), "key: #{key}"
+      end
+    end
+
+    test "stream_download/2 rejects them", %{ctx: ctx, outside: outside} do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.stream_download(key, ctx), "key: #{key}"
+      end
+    end
+
+    test "head/2 rejects them", %{ctx: ctx, outside: outside} do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.head(key, ctx), "key: #{key}"
+      end
+    end
+
+    test "delete/2 rejects them without deleting outside the root", %{
+      ctx: ctx,
+      outside: outside
+    } do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.delete(key, ctx), "key: #{key}"
+      end
+
+      assert File.exists?(outside)
+    end
+
+    test "exists?/2 rejects them", %{ctx: ctx, outside: outside} do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.exists?(key, ctx), "key: #{key}"
+      end
+    end
+
+    test "keys with .. that stay inside the root are allowed", %{ctx: ctx, root: root} do
+      assert :ok = Disk.upload("a/../inside.txt", "hello", ctx)
+      assert File.read!(Path.join(root, "inside.txt")) == "hello"
+      assert {:ok, "hello"} = Disk.download("b/../inside.txt", ctx)
+    end
+  end
+
+  # Keys that resolve to `outside`, which sits next to the service root
+  defp unsafe_keys(outside) do
+    [
+      "../outside.txt",
+      "nested/../../outside.txt",
+      "escape/outside.txt",
+      outside
+    ]
+  end
+
   describe "upload then download round-trip" do
     test "binary data survives round-trip", %{ctx: ctx} do
       content = :crypto.strong_rand_bytes(1024)

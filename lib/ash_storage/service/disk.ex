@@ -38,21 +38,26 @@ defmodule AshStorage.Service.Disk do
   @impl true
   def upload(key, io, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
 
-    path |> Path.dirname() |> File.mkdir_p!()
+    case safe_file_path(root, key) do
+      {:ok, safe_path} ->
+        safe_path |> Path.dirname() |> File.mkdir_p!()
 
-    case io do
-      %File.Stream{} = stream ->
-        stream
-        |> Stream.into(File.stream!(path))
-        |> Stream.run()
+        case io do
+          %File.Stream{} = stream ->
+            stream
+            |> Stream.into(File.stream!(safe_path))
+            |> Stream.run()
 
-      data when is_binary(data) ->
-        File.write(path, data)
+          data when is_binary(data) ->
+            File.write(safe_path, data)
 
-      data when is_list(data) ->
-        File.write(path, data)
+          data when is_list(data) ->
+            File.write(safe_path, data)
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -60,9 +65,9 @@ defmodule AshStorage.Service.Disk do
   @impl true
   def download(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
 
-    with {:ok, data} <- File.read(path),
+    with {:ok, safe_path} <- safe_file_path(root, key),
+         {:ok, data} <- File.read(safe_path),
          :ok <- verify_md5(data, ctx.expected_md5) do
       {:ok, data}
     else
@@ -75,14 +80,20 @@ defmodule AshStorage.Service.Disk do
   @impl true
   def stream_download(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
     chunk_size = Keyword.get(ctx.service_opts, :chunk_size, @default_chunk_size)
 
-    case File.stat(path) do
-      {:ok, %File.Stat{type: :directory}} -> {:error, :eisdir}
-      {:ok, %File.Stat{}} -> {:ok, File.stream!(path, chunk_size)}
-      {:error, :enoent} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
+    with {:ok, safe_path} <- safe_file_path(root, key),
+         {:ok, %File.Stat{type: :regular}} <- File.stat(safe_path) do
+      {:ok, File.stream!(safe_path, chunk_size)}
+    else
+      {:ok, %File.Stat{}} ->
+        {:error, :eisdir}
+
+      {:error, :enoent} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -90,10 +101,11 @@ defmodule AshStorage.Service.Disk do
   @impl true
   def delete(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
 
-    case File.rm(path) do
-      :ok -> :ok
+    with {:ok, safe_path} <- safe_file_path(root, key),
+         :ok <- File.rm(safe_path) do
+      :ok
+    else
       {:error, :enoent} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -103,18 +115,24 @@ defmodule AshStorage.Service.Disk do
   @impl true
   def exists?(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
-    {:ok, File.exists?(path)}
+
+    case safe_file_path(root, key) do
+      {:ok, safe_path} ->
+        {:ok, File.exists?(safe_path)}
+
+      {:error, _} = err ->
+        err
+    end
   end
 
-  # sobelow_skip ["Traversal.FileModule"]
+  # sobelow_skip ["Crypto.WeakHash", "Traversal.FileModule"]
   @impl true
   def head(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
-    path = Path.join(root, key)
 
-    with {:ok, %File.Stat{size: size}} <- File.stat(path),
-         {:ok, data} <- File.read(path) do
+    with {:ok, safe_path} <- safe_file_path(root, key),
+         {:ok, %File.Stat{size: size}} <- File.stat(safe_path),
+         {:ok, data} <- File.read(safe_path) do
       {:ok, %{etag: nil, content_md5: Base.encode64(:erlang.md5(data)), byte_size: size}}
     else
       {:error, :enoent} -> {:error, :not_found}
@@ -170,9 +188,20 @@ defmodule AshStorage.Service.Disk do
 
   defp verify_md5(_data, nil), do: :ok
 
+  # sobelow_skip ["Crypto.WeakHash"]
   defp verify_md5(data, expected) do
     if Base.encode64(:erlang.md5(data)) == expected,
       do: :ok,
       else: {:error, :checksum_mismatch}
+  end
+
+  defp safe_file_path(root, key) do
+    case Path.safe_relative(key, root) do
+      {:ok, path} ->
+        {:ok, Path.join(root, path)}
+
+      :error ->
+        {:error, :einval}
+    end
   end
 end

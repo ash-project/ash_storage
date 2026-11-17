@@ -273,6 +273,7 @@ if Code.ensure_loaded?(Req) do
 
     defp verify_md5(_data, nil), do: :ok
 
+    # sobelow_skip ["Crypto.WeakHash"]
     defp verify_md5(data, expected) do
       if Base.encode64(:erlang.md5(data)) == expected,
         do: :ok,

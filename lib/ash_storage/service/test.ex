@@ -105,6 +105,7 @@ defmodule AshStorage.Service.Test do
     do_exists?(key, opts)
   end
 
+  # sobelow_skip ["Crypto.WeakHash"]
   @impl true
   def head(key, %AshStorage.Service.Context{} = ctx) do
     case do_download(key, ctx.service_opts) do
@@ -197,6 +198,7 @@ defmodule AshStorage.Service.Test do
 
   defp verify_md5(_data, nil), do: :ok
 
+  # sobelow_skip ["Crypto.WeakHash"]
   defp verify_md5(data, expected) do
     if Base.encode64(:erlang.md5(data)) == expected,
       do: :ok,

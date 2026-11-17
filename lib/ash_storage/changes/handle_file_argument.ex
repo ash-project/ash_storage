@@ -10,7 +10,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   @impl true
   def init(opts), do: {:ok, opts}
 
-  # sobelow_skip ["DOS.BinToAtom", "Traversal.FileModule"]
+  # sobelow_skip ["DOS.BinToAtom"]
   @impl true
   def change(changeset, opts, context) do
     argument_name = opts[:argument]
@@ -314,6 +314,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     end
   end
 
+  # sobelow_skip ["Crypto.WeakHash"]
   defp upload_and_create_blob(resource, service_mod, ctx, io, context_opts, opts) do
     filename = Keyword.fetch!(opts, :filename)
     content_type = Keyword.get(opts, :content_type, "application/octet-stream")
@@ -366,6 +367,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
   # See `AshStorage.Changes.Attach.read_io/1` for the rationale on this
   # clause and the full input contract.
+  #
+  # sobelow_skip ["Traversal.FileModule"]
   defp read_io(%{__struct__: Plug.Upload, path: path}) when is_binary(path),
     do: File.read!(path)
 

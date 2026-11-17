@@ -12,7 +12,6 @@ defmodule AshStorage.Test.ExtraAttrsService do
   def upload(key, data, ctx) do
     case AshStorage.Service.Test.upload(key, data, ctx) do
       :ok -> {:ok, %{metadata: %{"injected" => "from_service", "key" => key}}}
-      error -> error
     end
   end
 
