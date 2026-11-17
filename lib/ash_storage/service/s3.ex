@@ -294,8 +294,13 @@ if Code.ensure_loaded?(ReqS3) do
         tls_versions =
           Keyword.get(opts, :tls_versions, "tlsv1.2")
           |> String.split(",")
-          |> Enum.reject(&(String.trim(&1) not in ["tlsv1.2", "tlsv1.3"]))
-          |> Enum.map(&String.to_atom(String.trim(&1)))
+          |> Enum.flat_map(fn version ->
+            case String.trim(version) do
+              "tlsv1.2" -> [:"tlsv1.2"]
+              "tlsv1.3" -> [:"tlsv1.3"]
+              _ -> []
+            end
+          end)
 
         transport_opts =
           [transport_opts: [versions: tls_versions]]
@@ -385,6 +390,7 @@ if Code.ensure_loaded?(ReqS3) do
 
     defp verify_md5(_data, nil), do: :ok
 
+    # sobelow_skip ["Crypto.WeakHash"]
     defp verify_md5(data, expected) do
       if Base.encode64(:erlang.md5(data)) == expected,
         do: :ok,

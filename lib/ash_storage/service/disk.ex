@@ -107,7 +107,7 @@ defmodule AshStorage.Service.Disk do
     {:ok, File.exists?(path)}
   end
 
-  # sobelow_skip ["Traversal.FileModule"]
+  # sobelow_skip ["Crypto.WeakHash", "Traversal.FileModule"]
   @impl true
   def head(key, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
@@ -170,6 +170,7 @@ defmodule AshStorage.Service.Disk do
 
   defp verify_md5(_data, nil), do: :ok
 
+  # sobelow_skip ["Crypto.WeakHash"]
   defp verify_md5(data, expected) do
     if Base.encode64(:erlang.md5(data)) == expected,
       do: :ok,

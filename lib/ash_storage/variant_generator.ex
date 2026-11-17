@@ -66,6 +66,7 @@ defmodule AshStorage.VariantGenerator do
     end
   end
 
+  # sobelow_skip ["Crypto.WeakHash"]
   defp upload_and_create_variant(
          source_blob,
          variant_name,
