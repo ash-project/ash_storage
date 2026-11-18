@@ -23,39 +23,71 @@ defmodule AshStorage.Plug.Redirect do
         service: {AshStorage.Service.S3, bucket: "my-bucket"},
         secret: "a-long-secret-key"
 
-  ## Disposition / filename forwarding
-
-  When the inbound request includes `?disposition=attachment&filename=foo.pdf`,
-  those values are merged into the service options before `url/2` is called,
-  so backends that support response-header overrides (S3
-  `response-content-disposition`, Azure SAS `rscd`) can encode them into the
-  generated URL.
-
   ## Options
 
   - `:service` - (required) the `{module, opts}` tuple for the storage service.
   - `:secret` - secret key for verifying signed app-level URLs. When set,
     requests without a valid `token`/`expires` query pair are rejected with 403.
-  - `:status` - HTTP status to use for the redirect (default: `302`). Use `307`
-    if method preservation matters for clients/tools that consume the URL.
+  - `:status` - HTTP status for the redirect (default: `302`)
+  - `:inline` - content types that may render in the browser: `:none` (default),
+    `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
+  - `:content_type_fallback` - content type assumed when the key has no
+    recognisable extension (default: `"application/octet-stream"`)
+
+  ## Disposition and content type
+
+  Only `GET` and `HEAD` are answered (`405` otherwise), and the redirect carries
+  `X-Content-Type-Options: nosniff`. The file itself is served by the storage
+  service, so the plug can only pass its decision to the service's `url/2`:
+
+  - unless the key's content type is in `:inline`, or when the request has
+    `?disposition=attachment`, it passes `disposition: "attachment"`;
+  - for an allowed type it passes `content_type:` with that type and no
+    disposition;
+  - `?filename=` is passed as `filename:` after removing quotes, backslashes,
+    control characters and path separators. Other `?disposition=` values are
+    ignored.
+
+  The content type comes from the key's extension. Generated keys have none, so
+  `:inline` only takes effect for keys with an extension, or through
+  `:content_type_fallback` on a mount that holds one kind of file.
+
+  Whether the final response honours this depends on the service. Azure SAS
+  URLs (`presigned: true`) carry it. A Disk URL leads to
+  `AshStorage.Plug.DiskServe`; when the Disk service signs URLs, the
+  disposition travels in the URL and forces a download there, so inline
+  rendering needs `inline:` on both mounts (without a `:secret` the DiskServe
+  mount alone decides). S3 URLs, Azure URLs without presigning and
+  `AshStorage.Service.Mirror` do not carry it: the object is served with the
+  headers stored on it. See [Serving files](serving.md).
   """
 
   @behaviour Plug
+
+  alias AshStorage.Plug.ResponseMetadata
 
   @impl true
   def init(opts) do
     {service_mod, service_opts} = Keyword.fetch!(opts, :service)
 
-    %{
+    Map.merge(ResponseMetadata.init(opts), %{
       service_mod: service_mod,
       service_opts: service_opts,
       secret: Keyword.get(opts, :secret),
       status: Keyword.get(opts, :status, 302)
-    }
+    })
   end
 
   @impl true
   def call(conn, opts) do
+    conn = ResponseMetadata.put_nosniff(conn)
+
+    if ResponseMetadata.allowed_method?(conn),
+      do: serve(conn, opts),
+      else: ResponseMetadata.method_not_allowed(conn)
+  end
+
+  defp serve(conn, opts) do
     key = conn.path_info |> Enum.join("/")
 
     if key == "" do
@@ -63,7 +95,7 @@ defmodule AshStorage.Plug.Redirect do
     else
       case verify_signature(conn, opts) do
         :ok ->
-          ctx = AshStorage.Service.Context.new(merged_service_opts(conn, opts))
+          ctx = AshStorage.Service.Context.new(url_opts(conn, key, opts))
           url = opts.service_mod.url(key, ctx)
 
           conn
@@ -78,16 +110,20 @@ defmodule AshStorage.Plug.Redirect do
     end
   end
 
-  defp merged_service_opts(conn, opts) do
-    params = Plug.Conn.fetch_query_params(conn).query_params
+  # The plug never widens: it asks for an attachment unless the type is allowed,
+  # and leaves any disposition configured on the service in place otherwise.
+  defp url_opts(conn, key, opts) do
+    request = ResponseMetadata.request_overrides(conn)
+    content_type = ResponseMetadata.content_type(key: key, fallback: opts.content_type_fallback)
+    service_opts = maybe_put(opts.service_opts, :filename, request.filename)
 
-    opts.service_opts
-    |> maybe_put(:disposition, params["disposition"])
-    |> maybe_put(:filename, params["filename"])
+    case ResponseMetadata.disposition(content_type, opts.inline, request.disposition) do
+      :attachment -> Keyword.put(service_opts, :disposition, "attachment")
+      :inline -> Keyword.put(service_opts, :content_type, content_type)
+    end
   end
 
   defp maybe_put(keyword, _key, nil), do: keyword
-  defp maybe_put(keyword, _key, ""), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
   defp verify_signature(_conn, %{secret: nil}), do: :ok

@@ -117,7 +117,8 @@ defmodule AshStorage.MixProject do
         ],
         Plugs: [
           AshStorage.Plug.DiskServe,
-          AshStorage.Plug.Proxy
+          AshStorage.Plug.Proxy,
+          AshStorage.Plug.Redirect
         ],
         Utilities: [
           AshStorage.Token
