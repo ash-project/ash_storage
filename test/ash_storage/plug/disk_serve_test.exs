@@ -22,12 +22,21 @@ defmodule AshStorage.Plug.DiskServeTest do
     :ok
   end
 
-  defp call(path, opts \\ []) do
+  defp call(path, opts \\ []), do: request(:get, path, opts)
+
+  defp request(method, path, opts \\ []) do
     plug_opts =
       DiskServe.init(Keyword.merge([root: @root], opts))
 
-    conn(:get, path)
+    conn(method, path)
     |> DiskServe.call(plug_opts)
+  end
+
+  defp header(conn, name) do
+    case Plug.Conn.get_resp_header(conn, name) do
+      [value] -> value
+      [] -> nil
+    end
   end
 
   describe "serving files" do
@@ -35,6 +44,8 @@ defmodule AshStorage.Plug.DiskServeTest do
       conn = call("/hello.txt")
       assert conn.status == 200
       assert conn.resp_body == "hello world"
+      assert header(conn, "x-content-type-options") == "nosniff"
+      assert header(conn, "content-disposition") == "attachment"
     end
 
     test "sets content-type from file extension" do
@@ -162,6 +173,103 @@ defmodule AshStorage.Plug.DiskServeTest do
       assert conn.status == 200
       [disposition] = Plug.Conn.get_resp_header(conn, "content-disposition")
       assert disposition == "attachment; filename=\"download.txt\""
+    end
+  end
+
+  describe "response headers" do
+    @secret "test-secret-32bytes!!!!!!!!!!!!!!"
+
+    test "a file requested as HTML downloads instead of rendering" do
+      conn = call("/#{@hex_key}/evil.html")
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "text/html"
+      assert header(conn, "content-disposition") == "attachment"
+      assert header(conn, "x-content-type-options") == "nosniff"
+    end
+
+    test "SVG is not rendered inline by the built-in sets" do
+      conn = call("/#{@hex_key}/image.svg", inline: :documents)
+      assert header(conn, "content-type") =~ "image/svg+xml"
+      assert header(conn, "content-disposition") == "attachment"
+    end
+
+    test "images render inline only when allowlisted and not forced to download" do
+      path = "/#{@hex_key}/photo.png"
+
+      assert header(call(path), "content-disposition") == "attachment"
+      assert header(call(path, inline: :images), "content-disposition") == "inline"
+
+      assert header(
+               call(path <> "?disposition=attachment", inline: :images),
+               "content-disposition"
+             ) ==
+               "attachment"
+    end
+
+    test "a request cannot widen the policy" do
+      conn = call("/#{@hex_key}/evil.html?disposition=inline", inline: :images)
+      assert header(conn, "content-disposition") == "attachment"
+    end
+
+    test "a signed URL with an HTML name appended still downloads" do
+      expires = System.system_time(:second) + 3600
+      token = AshStorage.Token.sign(@secret, @hex_key, expires)
+
+      conn =
+        call("/#{@hex_key}/x.html?token=#{URI.encode_www_form(token)}&expires=#{expires}",
+          secret: @secret
+        )
+
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "text/html"
+      assert header(conn, "content-disposition") == "attachment"
+    end
+
+    test "a trailing segment without a known extension falls back to the key" do
+      assert header(call("/hello.txt/noext"), "content-type") =~ "text/plain"
+    end
+
+    test "uses :content_type_fallback when the path gives no type" do
+      conn = call("/#{@hex_key}", content_type_fallback: "text/plain")
+      assert header(conn, "content-type") =~ "text/plain"
+    end
+
+    test "only GET and HEAD are answered" do
+      conn = request(:delete, "/hello.txt")
+      assert conn.status == 405
+      assert header(conn, "allow") == "GET, HEAD"
+      assert header(conn, "x-content-type-options") == "nosniff"
+      assert File.exists?(Path.join(@root, "hello.txt"))
+
+      conn = request(:head, "/hello.txt")
+      assert conn.status == 200
+      assert conn.resp_body == ""
+    end
+
+    test "encodes a non-ASCII filename" do
+      conn = call("/hello.txt?filename=#{URI.encode_www_form("résumé.txt")}")
+
+      assert header(conn, "content-disposition") ==
+               ~s(attachment; filename="r_sum_.txt"; filename*=UTF-8''r%C3%A9sum%C3%A9.txt)
+    end
+
+    test "error responses carry nosniff" do
+      for {conn, status} <- [
+            {call("/nonexistent.txt"), 404},
+            {call("/"), 404},
+            {call("/hello.txt", secret: @secret), 403}
+          ] do
+        assert conn.status == status
+        assert header(conn, "x-content-type-options") == "nosniff"
+      end
+    end
+
+    test "init/1 rejects invalid options" do
+      assert_raise ArgumentError, fn -> DiskServe.init(root: @root, inline: "image/png") end
+
+      assert_raise ArgumentError, fn ->
+        DiskServe.init(root: @root, content_type_fallback: :text)
+      end
     end
   end
 end

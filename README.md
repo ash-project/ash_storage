@@ -380,6 +380,19 @@ mix test --include azure_integration test/ash_storage/service/azure_blob_integra
 
 The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docker. Disk and Test service coverage run as part of the normal test suite.
 
+## Serving files
+
+Mount a plug to serve stored files, for example for the Disk service:
+
+```elixir
+forward "/files", AshStorage.Plug.DiskServe, root: "priv/storage", inline: :images
+```
+
+`AshStorage.Plug.DiskServe` and `AshStorage.Plug.Proxy` send `X-Content-Type-Options: nosniff` and
+serve every file as a download unless its content type is allowed by the mount's `:inline` option.
+See [Serving files](documentation/topics/serving.md) for the options and for serving user content
+from a separate origin.
+
 ## Roadmap
 
 - ~~**Analyzers**~~ ✅ — Pluggable metadata extraction (image dimensions, video duration, audio bitrate) stored in blob `analyzers` map. Runs synchronously during attach from local IO by default. With AshOban: optionally enqueue via `analyze: :oban`. Supports `write_attributes` to write results back to parent record attributes. Custom analyzers implement the `AshStorage.Analyzer` behaviour.

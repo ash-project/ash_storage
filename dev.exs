@@ -551,7 +551,8 @@ defmodule DemoWeb.Router do
 
   forward "/disk_files", AshStorage.Plug.DiskServe,
     root: "tmp/dev_storage",
-    secret: "dev-secret-key-for-signed-urls!!"
+    secret: "dev-secret-key-for-signed-urls!!",
+    inline: :images
 end
 
 defmodule DemoWeb.Endpoint do

@@ -8,6 +8,10 @@ defmodule AshStorage.Service.Disk do
         service {AshStorage.Service.Disk, root: "priv/storage", base_url: "/files"}
       end
 
+  Files are served by `AshStorage.Plug.DiskServe` mounted at `base_url`. By
+  default they are sent as downloads; see the plug's `:inline` option and
+  [Serving files](serving.md).
+
   ## Options
 
   - `:root` - (required) the root directory for file storage
