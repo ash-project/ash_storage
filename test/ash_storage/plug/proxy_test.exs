@@ -116,6 +116,22 @@ defmodule AshStorage.Plug.ProxyTest do
       end
     end
 
+    test "rejects missing, altered, expired and foreign tokens without a download" do
+      service = {RecordingService, test_pid: self()}
+
+      upload("secret.txt")
+      assert call(crafted_path("secret.txt", @secret), secret: @secret).status == 200
+
+      for {description, path} <- rejected_paths("secret.txt", @secret) do
+        conn = call(path, service: service, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{description}"
+        assert conn.resp_body == "Forbidden"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        refute_received {:download_called, _}
+      end
+    end
+
     test "an unsigned mount ignores a token parameter" do
       upload("file.txt")
 
