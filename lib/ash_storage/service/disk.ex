@@ -20,16 +20,35 @@ defmodule AshStorage.Service.Disk do
     returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
     plug will verify before serving files.
   - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
+  - `:owner_only` - when `true` (the default), files are written with mode
+    `0600` and directories are created with mode `0700`. Set it to `false` to
+    leave the modes to the umask of the process. Any other value raises
+    `ArgumentError`. See "File modes" below.
   - `:chunk_size` - bytes per chunk for `stream_download/2` (default: `65_536`).
     Only `:root` is persisted per `service_opts_fields/0`, so this is honored
     when the context carries live service opts (calling `stream_download/2`
     directly) but not when the context is rebuilt from a blob record via
     `AshStorage.Operations.stream_download/2`, which always uses the default.
+
+  ## File modes
+
+  By default only the operating system user that runs the application can read
+  what the service stores. `upload/3` gives every file it writes the mode
+  `0600`, also when it replaces a file, and gives the directories it creates,
+  including a missing root, the mode `0700`. Directories that already exist
+  keep their mode, and so do files that were stored earlier. When a mode cannot
+  be set, the upload fails with the error from the file system.
+
+  Set `owner_only: false` when another user has to read the files, for example
+  a web server that serves the root itself, and control the modes with the
+  umask. On Windows the option has no effect.
   """
 
   @behaviour AshStorage.Service
 
   @default_chunk_size 65_536
+  @file_mode 0o600
+  @directory_mode 0o700
 
   @impl true
   def service_opts_fields do
@@ -38,30 +57,77 @@ defmodule AshStorage.Service.Disk do
     ]
   end
 
-  # sobelow_skip ["Traversal.FileModule"]
   @impl true
   def upload(key, io, %AshStorage.Service.Context{} = ctx) do
     root = Keyword.fetch!(ctx.service_opts, :root)
+    owner_only? = owner_only!(ctx.service_opts)
 
-    case safe_file_path(root, key) do
-      {:ok, safe_path} ->
-        safe_path |> Path.dirname() |> File.mkdir_p!()
+    with {:ok, safe_path} <- safe_file_path(root, key),
+         :ok <- ensure_directory(Path.dirname(safe_path), owner_only?),
+         :ok <- prepare_file(safe_path, owner_only?) do
+      write_file(safe_path, io)
+    end
+  end
 
-        case io do
-          %File.Stream{} = stream ->
-            stream
-            |> Stream.into(File.stream!(safe_path))
-            |> Stream.run()
+  defp owner_only!(opts) do
+    case Keyword.get(opts, :owner_only, true) do
+      value when is_boolean(value) ->
+        value
 
-          data when is_binary(data) ->
-            File.write(safe_path, data)
+      other ->
+        raise ArgumentError,
+              "invalid :owner_only option #{inspect(other)}. Expected true or false"
+    end
+  end
 
-          data when is_list(data) ->
-            File.write(safe_path, data)
-        end
+  # sobelow_skip ["Traversal.FileModule"]
+  defp write_file(path, io) do
+    case io do
+      %File.Stream{} = stream ->
+        stream
+        |> Stream.into(File.stream!(path))
+        |> Stream.run()
 
-      {:error, _} = err ->
-        err
+      data when is_binary(data) or is_list(data) ->
+        File.write(path, data)
+    end
+  end
+
+  # Creates the missing directories one level at a time, so that the mode is
+  # set on the directories this call creates and on no others.
+  defp ensure_directory(dir, owner_only?) do
+    if File.dir?(dir) do
+      :ok
+    else
+      with :ok <- ensure_directory(Path.dirname(dir), owner_only?) do
+        make_directory(dir, owner_only?)
+      end
+    end
+  end
+
+  # sobelow_skip ["Traversal.FileModule"]
+  defp make_directory(dir, owner_only?) do
+    case File.mkdir(dir) do
+      :ok when owner_only? -> File.chmod(dir, @directory_mode)
+      :ok -> :ok
+      # another upload created it first
+      {:error, :eexist} -> :ok
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp prepare_file(_path, false), do: :ok
+
+  # The mode is set while the file is still empty (or still holds the old
+  # content, when it is being replaced), so the new content is not written
+  # under the umask's mode. This narrows the window, it does not close it: a
+  # process that opened the file before the `chmod` keeps its handle. Opening
+  # for append creates the file without truncating it and fails on a directory.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp prepare_file(path, true) do
+    with {:ok, device} <- File.open(path, [:append]),
+         :ok <- File.close(device) do
+      File.chmod(path, @file_mode)
     end
   end
 

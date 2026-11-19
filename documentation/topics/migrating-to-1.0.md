@@ -166,3 +166,28 @@ For tenants with other characters the old layout cannot be kept. Map the tenant
 to a valid segment, as [Tenant prefixes](storage-keys.md#tenant-prefixes)
 shows. New files then go under the new prefix. Files that are already stored
 keep their keys and are still found, because the key is on the blob record.
+
+## The Disk service writes owner-only files
+
+What changed: `AshStorage.Service.Disk` gives every file it writes the mode
+`0600`, and every directory it creates the mode `0700`. Before, both followed
+the umask of the process, which usually meant `0644` and `0755`. Directories
+that already exist keep their mode, and files that are already stored are not
+touched. A failed upload now returns `{:error, reason}` when a directory
+cannot be created, where it raised before.
+
+Who this affects: setups where another operating system user reads the files,
+for example a web server that serves the storage root itself, or a backup job
+that runs under its own account.
+
+What to do: nothing, when only the application reads the files (through
+`AshStorage.Plug.DiskServe` or `AshStorage.Plug.Proxy`). Otherwise set
+`owner_only: false` on the service and control the modes with the umask as
+before:
+
+```elixir
+service {AshStorage.Service.Disk, root: "priv/storage", base_url: "/files", owner_only: false}
+```
+
+To tighten the files that are already stored, run `chmod -R go-rwx` on the
+storage root once.

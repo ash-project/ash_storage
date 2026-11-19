@@ -272,7 +272,7 @@ end
 
 AshStorage ships with:
 
-- `AshStorage.Service.Disk` — Local filesystem storage
+- `AshStorage.Service.Disk` — Local filesystem storage. Files are written with owner-only modes (`owner_only: false` turns that off)
 - `AshStorage.Service.Test` — In-memory storage for tests
 - `AshStorage.Service.S3` — S3-compatible storage (requires [`req_s3`](https://hex.pm/packages/req_s3))
 - `AshStorage.Service.AzureBlob` — Azure Blob Storage (requires [`req`](https://hex.pm/packages/req))
