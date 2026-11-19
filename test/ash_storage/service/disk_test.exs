@@ -36,6 +36,109 @@ defmodule AshStorage.Service.DiskTest do
     end
   end
 
+  # POSIX modes; on Windows `File.chmod/2` only toggles the read-only flag.
+  if match?({:unix, _}, :os.type()) do
+    describe "file modes" do
+      import Bitwise
+
+      defp mode(path), do: File.stat!(path).mode &&& 0o777
+
+      test "a new file is readable and writable by its owner only", %{ctx: ctx, root: root} do
+        assert :ok = Disk.upload("test.txt", "hello", ctx)
+        assert mode(Path.join(root, "test.txt")) == 0o600
+      end
+
+      test "an iolist and a file stream get the same mode", %{ctx: ctx, root: root} do
+        source = Path.join(root, "source.txt")
+        File.write!(source, "streamed")
+
+        assert :ok = Disk.upload("list.txt", ["a", "b"], ctx)
+        assert :ok = Disk.upload("stream.txt", File.stream!(source), ctx)
+
+        assert mode(Path.join(root, "list.txt")) == 0o600
+        assert mode(Path.join(root, "stream.txt")) == 0o600
+        assert File.read!(Path.join(root, "stream.txt")) == "streamed"
+      end
+
+      test "directories it creates are owner-only, existing ones are left alone", %{
+        ctx: ctx,
+        root: root
+      } do
+        File.mkdir!(Path.join(root, "shared"))
+        File.chmod!(Path.join(root, "shared"), 0o755)
+        root_mode = mode(root)
+
+        assert :ok = Disk.upload("shared/a/b/test.txt", "nested", ctx)
+
+        assert mode(Path.join(root, "shared/a")) == 0o700
+        assert mode(Path.join(root, "shared/a/b")) == 0o700
+        assert mode(Path.join(root, "shared")) == 0o755
+        assert mode(root) == root_mode
+      end
+
+      test "a missing root is created owner-only", %{tmp_dir: tmp_dir} do
+        root = Path.join(tmp_dir, "new/root")
+        ctx = Context.new(root: root)
+
+        assert :ok = Disk.upload("test.txt", "hello", ctx)
+        assert mode(root) == 0o700
+        assert mode(Path.join(tmp_dir, "new")) == 0o700
+      end
+
+      test "replacing a file tightens its mode", %{ctx: ctx, root: root} do
+        path = Path.join(root, "test.txt")
+        File.write!(path, "old")
+        File.chmod!(path, 0o644)
+
+        assert :ok = Disk.upload("test.txt", "new", ctx)
+        assert File.read!(path) == "new"
+        assert mode(path) == 0o600
+      end
+
+      test "a key that names a directory is refused and the directory keeps its mode", %{
+        ctx: ctx,
+        root: root
+      } do
+        File.mkdir!(Path.join(root, "dir"))
+        File.chmod!(Path.join(root, "dir"), 0o755)
+
+        assert {:error, :eisdir} = Disk.upload("dir", "data", ctx)
+        assert mode(Path.join(root, "dir")) == 0o755
+      end
+
+      test "owner_only: false leaves the modes to the process umask", %{root: root} do
+        ctx = Context.new(root: root, owner_only: false)
+
+        # What the umask gives a file and a directory created without the option.
+        File.mkdir_p!(Path.join(root, "control/dir"))
+        File.write!(Path.join(root, "control/file"), "x")
+
+        assert :ok = Disk.upload("a/b/test.txt", "hello", ctx)
+
+        assert mode(Path.join(root, "a/b/test.txt")) == mode(Path.join(root, "control/file"))
+        assert mode(Path.join(root, "a/b")) == mode(Path.join(root, "control/dir"))
+      end
+    end
+  end
+
+  describe "upload/3 errors" do
+    test "returns the error when a directory cannot be created", %{ctx: ctx, root: root} do
+      File.write!(Path.join(root, "file"), "x")
+      assert {:error, reason} = Disk.upload("file/nested/test.txt", "data", ctx)
+      assert reason in [:enotdir, :eexist]
+    end
+
+    test "an invalid :owner_only option raises before anything is created", %{root: root} do
+      ctx = Context.new(root: root, owner_only: nil)
+
+      assert_raise ArgumentError, ~r/invalid :owner_only option nil/, fn ->
+        Disk.upload("a/test.txt", "data", ctx)
+      end
+
+      refute File.exists?(Path.join(root, "a"))
+    end
+  end
+
   describe "download/2" do
     test "downloads an existing file", %{ctx: ctx, root: root} do
       File.write!(Path.join(root, "test.txt"), "hello")

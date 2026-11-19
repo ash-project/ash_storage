@@ -41,6 +41,7 @@ defmodule AshStorage do
   - `AshStorage.AttachmentResource` — DSL extension for attachment join resources
   - `AshStorage.Operations` — Functions for attaching, detaching, and purging files
   - `AshStorage.Service` — Behaviour for storage backends
+  - `AshStorage.Key` — The rules for storage keys
   """
 
   alias AshStorage.AnalyzerDefinition
@@ -169,52 +170,70 @@ defmodule AshStorage do
 
   `changeset` is `nil` when there is no parent action, as in
   `AshStorage.Operations.prepare_direct_upload/3`. The tenant then comes from the context.
+
+  Returns `{:ok, key}`, or `{:error, error}` when the key breaks the rules in
+  `AshStorage.Key` or the tenant cannot be used as a key segment. Nothing has
+  been uploaded or created at that point.
   """
+  @spec resolve_key(
+          AttachmentDefinition.t(),
+          AshStorage.Service.Context.t(),
+          Ash.Changeset.t() | nil
+        ) ::
+          {:ok, String.t()} | {:error, AshStorage.Key.error()}
   def resolve_key(attachment_def, context, changeset) do
-    case attachment_def.path do
-      nil ->
-        resolve_tenant_key(tenant(context, changeset), context.resource)
+    resolved =
+      case attachment_def.path do
+        nil ->
+          resolve_tenant_key(tenant(context, changeset), context.resource)
 
-      "" ->
-        resolve_tenant_key(tenant(context, changeset), context.resource)
+        "" ->
+          resolve_tenant_key(tenant(context, changeset), context.resource)
 
-      path_fn when is_function(path_fn, 2) ->
-        path_fn.(context, changeset)
-    end
+        path_fn when is_function(path_fn, 2) ->
+          {:ok, path_fn.(context, changeset)}
+      end
+
+    validated(resolved)
   end
 
   @doc """
-  Resolve the storage key for an attachment from the source blob's key.
-  """
-  def resolve_variant_key(source_blob_key) do
-    path =
-      String.split(source_blob_key, "/")
-      |> Enum.drop(-1)
-      |> Enum.join("/")
+  Resolve the storage key for a variant from the source blob's key.
 
-    if byte_size(path) > 0 do
-      "#{path}/#{generate_key()}"
-    else
-      generate_key()
+  The variant is stored next to its source: the key is the source key with its
+  last segment replaced by a new generated key. Returns `{:ok, key}`, or
+  `{:error, error}` when the result breaks the rules in `AshStorage.Key`.
+  """
+  @spec resolve_variant_key(String.t()) :: {:ok, String.t()} | {:error, AshStorage.Key.error()}
+  def resolve_variant_key(source_blob_key) do
+    case source_blob_key |> String.split("/") |> Enum.drop(-1) do
+      [] -> {:ok, generate_key()}
+      segments -> validated({:ok, Enum.join(segments ++ [generate_key()], "/")})
     end
   end
+
+  defp validated({:ok, key}) do
+    with :ok <- AshStorage.Key.validate(key), do: {:ok, key}
+  end
+
+  defp validated({:error, _} = error), do: error
 
   defp tenant(context, nil), do: context.tenant
   defp tenant(_context, changeset), do: changeset.tenant
 
   defp resolve_tenant_key(tenant, resource) do
-    case tenant do
-      nil ->
-        generate_key()
-
+    case tenant_prefix(tenant, resource) do
       "" ->
-        generate_key()
+        {:ok, generate_key()}
 
-      tenant when is_binary(tenant) ->
-        Path.join([tenant, generate_key()])
-
-      tenant ->
-        Path.join([to_string(Ash.ToTenant.to_tenant(tenant, resource)), generate_key()])
+      prefix ->
+        with :ok <- AshStorage.Key.validate_tenant(prefix) do
+          {:ok, prefix <> "/" <> generate_key()}
+        end
     end
   end
+
+  defp tenant_prefix(nil, _resource), do: ""
+  defp tenant_prefix(tenant, _resource) when is_binary(tenant), do: tenant
+  defp tenant_prefix(tenant, resource), do: to_string(Ash.ToTenant.to_tenant(tenant, resource))
 end

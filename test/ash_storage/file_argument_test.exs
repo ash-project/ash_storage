@@ -96,6 +96,41 @@ defmodule AshStorage.FileArgumentTest do
     end
   end
 
+  describe "bulk create with :file argument" do
+    test "attaches per record and keeps records without a file in place" do
+      path1 = Path.join(System.tmp_dir!(), "ash_storage_bulk_mixed_1.txt")
+      path3 = Path.join(System.tmp_dir!(), "ash_storage_bulk_mixed_3.txt")
+      File.write!(path1, "first")
+      File.write!(path3, "third")
+
+      result =
+        Ash.bulk_create(
+          [
+            %{title: "one", cover_image: Ash.Type.File.from_path(path1)},
+            %{title: "two"},
+            %{title: "three", cover_image: Ash.Type.File.from_path(path3)}
+          ],
+          AshStorage.Test.Post,
+          :create_with_image,
+          return_records?: true,
+          return_errors?: true,
+          sorted?: true
+        )
+
+      assert result.status == :success
+      assert [one, two, three] = Ash.load!(result.records, cover_image: :blob)
+      assert Enum.map([one, two, three], & &1.title) == ["one", "two", "three"]
+
+      assert {:ok, "first"} = AshStorage.Service.Test.download(one.cover_image.blob.key, [])
+      assert two.cover_image == nil
+      assert {:ok, "third"} = AshStorage.Service.Test.download(three.cover_image.blob.key, [])
+      assert length(AshStorage.Service.Test.list_keys()) == 2
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_bulk_mixed_1.txt"))
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_bulk_mixed_3.txt"))
+    end
+  end
+
   describe "update with :file argument" do
     test "attaches file on update" do
       post =

@@ -38,6 +38,10 @@ defmodule AshStorage.Plug.Proxy do
   `?disposition=attachment` forces a download and `?filename=` sets the download
   name, but a request cannot make a file render inline.
 
+  A request whose key is empty, contains a control character, starts with `/`
+  or `\\`, or has a `..` segment gets `404` before the signature is checked and
+  without a call to the service. See [Storage keys](storage-keys.md).
+
   The content type comes from the key's extension. Generated keys have none, so
   on this plug `:inline` only takes effect for keys with an extension, or through
   `:content_type_fallback` on a mount that holds one kind of file. See
@@ -72,7 +76,7 @@ defmodule AshStorage.Plug.Proxy do
   defp serve(conn, opts) do
     key = conn.path_info |> Enum.join("/")
 
-    if key == "" do
+    if match?({:error, _}, AshStorage.Key.validate_lookup(key)) do
       conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
     else
       case verify_signature(conn, opts) do

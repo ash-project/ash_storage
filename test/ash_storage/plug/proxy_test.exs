@@ -5,6 +5,27 @@ defmodule AshStorage.Plug.ProxyTest do
 
   alias AshStorage.Plug.Proxy
 
+  defmodule RecordingService do
+    @moduledoc false
+    # Tells the test process about every download it is asked for.
+    @behaviour AshStorage.Service
+
+    @impl true
+    def upload(_, _, _), do: :ok
+    @impl true
+    def download(key, ctx) do
+      send(Keyword.fetch!(ctx.service_opts, :test_pid), {:download_called, key})
+      {:ok, "data"}
+    end
+
+    @impl true
+    def delete(_, _), do: :ok
+    @impl true
+    def exists?(_, _), do: {:ok, true}
+    @impl true
+    def url(key, _), do: "https://example.test/#{key}"
+  end
+
   setup do
     AshStorage.Service.Test.reset!()
     :ok
@@ -254,6 +275,65 @@ defmodule AshStorage.Plug.ProxyTest do
 
       assert_raise ArgumentError, fn ->
         Proxy.init(service: {AshStorage.Service.Test, []}, content_type_fallback: "plain")
+      end
+    end
+  end
+
+  describe "keys that could reach outside the store" do
+    # `path_info` is set directly: a router hands the plug raw segments, and a
+    # plug in front of the mount may have decoded them.
+    defp call_with_path_info(path_info, opts \\ []) do
+      opts = Keyword.put_new(opts, :service, {RecordingService, test_pid: self()})
+      conn = %{conn(:get, "/") | path_info: path_info}
+      Proxy.call(conn, Proxy.init(opts))
+    end
+
+    test "answers 404 without calling the service" do
+      for path_info <- [
+            ["..", "secret.txt"],
+            ["a", "..", "secret.txt"],
+            ["a", ".."],
+            ["../secret.txt"],
+            ["..\\secret.txt"],
+            ["/etc/passwd"],
+            ["a\0.txt"],
+            ["a\nb"]
+          ] do
+        conn = call_with_path_info(path_info)
+
+        assert conn.status == 404, "expected 404 for #{inspect(path_info)}"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        refute_received {:download_called, _}
+      end
+    end
+
+    test "answers 404 before the signature is checked" do
+      assert call_with_path_info(["..", "secret.txt"], secret: @secret).status == 404
+    end
+
+    test "a `..` segment over the Disk service is a 404, not a 502" do
+      root =
+        Path.join(System.tmp_dir!(), "ash_storage_proxy_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(root, "store"))
+      File.write!(Path.join(root, "secret.txt"), "secret")
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      conn =
+        call("/../secret.txt",
+          service: {AshStorage.Service.Disk, root: Path.join(root, "store"), base_url: "/files"}
+        )
+
+      assert conn.status == 404
+      refute conn.resp_body =~ "secret"
+    end
+
+    test "still serves keys that the write-side rules now reject" do
+      for key <- ["back\\slash.txt", "a/./b.txt", "trailing.txt/"] do
+        conn = call_with_path_info(String.split(key, "/"))
+
+        assert conn.status == 200, "expected 200 for #{inspect(key)}"
+        assert_received {:download_called, ^key}
       end
     end
   end

@@ -272,7 +272,7 @@ end
 
 AshStorage ships with:
 
-- `AshStorage.Service.Disk` — Local filesystem storage
+- `AshStorage.Service.Disk` — Local filesystem storage. Files are written with owner-only modes (`owner_only: false` turns that off)
 - `AshStorage.Service.Test` — In-memory storage for tests
 - `AshStorage.Service.S3` — S3-compatible storage (requires [`req_s3`](https://hex.pm/packages/req_s3))
 - `AshStorage.Service.AzureBlob` — Azure Blob Storage (requires [`req`](https://hex.pm/packages/req))
@@ -379,6 +379,15 @@ mix test --include azure_integration test/ash_storage/service/azure_blob_integra
 ```
 
 The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docker. Disk and Test service coverage run as part of the normal test suite.
+
+## Storage keys
+
+Each file is stored under a key: a random one by default, prefixed with the tenant when there is
+one, or whatever the attachment's `path` function returns. Keys are checked before anything is
+stored. A key is made of segments separated by `/`, and a segment may contain only ASCII letters,
+digits, `.`, `_` and `-`, and must not end with `.`. A key has no empty, `.` or `..` segment and
+is at most 1024 bytes long. See [Storage keys](documentation/topics/storage-keys.md) for the
+rules, for `path` functions and for tenant prefixes.
 
 ## Serving files
 

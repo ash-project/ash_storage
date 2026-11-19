@@ -12,6 +12,13 @@ response headers they send and how to choose what may render in the browser.
 They serve by storage key and do not look up the blob, so the blob's recorded 
 `content_type` and `filename` are not used.
 
+## Keys from the request
+
+The plugs take the storage key from the request path and answer `404`, without
+calling the service, for a key that could reach outside the store: an empty
+key, one with a control character, one that starts with `/` or `\`, and one
+with a `..` segment. See [Storage keys](storage-keys.md).
+
 ## Defaults
 
 `AshStorage.Plug.DiskServe` and `AshStorage.Plug.Proxy` apply these defaults to 

@@ -50,7 +50,7 @@ defmodule AshStorage.AttachmentResource do
   - `name` (string, required) - attachment name (e.g. "avatar")
 
   When no `belongs_to_resource` is declared (polymorphic mode):
-  - `record_type` (string, required) - the type of the owning record
+  - `record_type` (string, required) - identifies the owning resource; see `AshStorage.Info.record_type/1`
   - `record_id` (string, required) - the ID of the owning record
 
   ## Relationships

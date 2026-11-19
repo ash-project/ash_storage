@@ -219,7 +219,7 @@ has_one_attached :cover_image do
 end
 ```
 
-Without a `path`, the key is prefixed with the tenant, if there is one.
+Without a `path`, the key is prefixed with the tenant, if there is one. The key must follow the rules in [Storage keys](storage-keys.md); otherwise `prepare_direct_upload/3` returns `{:error, {:invalid_storage_key, reason, key}}` and creates no blob.
 
 ## AshJsonApi
 

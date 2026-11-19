@@ -12,6 +12,8 @@ defmodule AshStorage.AttachmentDefinition do
     variants: []
   ]
 
+  @type t :: %__MODULE__{}
+
   @shared_schema [
     name: [
       type: :atom,
@@ -33,7 +35,7 @@ defmodule AshStorage.AttachmentDefinition do
     path: [
       type: {:fun, 2},
       doc:
-        "Specify a path for the key. Accepts a 2-arity function `fn ctx, changeset -> ...`. The changeset is `nil` for direct uploads, which have no parent action, so use `ctx.actor` and `ctx.tenant` for a path that works in both. When path is not specified, falls back to the tenant if available.",
+        "Specify a path for the key. Accepts a 2-arity function `fn ctx, changeset -> ...`. The changeset is `nil` for direct uploads, which have no parent action, so use `ctx.actor` and `ctx.tenant` for a path that works in both. When path is not specified, falls back to the tenant if available. The result must be a valid storage key, see `AshStorage.Key`.",
       required: false
     ]
   ]

@@ -37,6 +37,10 @@ defmodule AshStorage.Plug.DiskServe do
   `?disposition=attachment` forces a download and `?filename=` sets the download
   name, but a request cannot make a file render inline.
 
+  The key is the first segment of the request path. A key that is empty,
+  contains a control character, starts with `/` or `\\`, is `..`, or names a
+  directory gets `404`. See [Storage keys](storage-keys.md).
+
   The content type comes from the segment after the key (`/<key>/<filename>`),
   else from the key. That segment is chosen by whoever makes the request and is
   not covered by the signature, so listing an active type such as `text/html` or
@@ -70,10 +74,11 @@ defmodule AshStorage.Plug.DiskServe do
   # sobelow_skip ["Traversal.SendFile", "Traversal.FileModule"]
   defp serve(conn, opts) do
     with [key | segments] <- conn.path_info,
+         :ok <- AshStorage.Key.validate_lookup(key),
          :ok <- verify_signature(conn, opts) do
       path = Path.join(opts.root, key)
 
-      if File.exists?(path) do
+      if File.regular?(path) do
         content_type =
           ResponseMetadata.content_type(
             filename: List.last(segments),
@@ -89,8 +94,14 @@ defmodule AshStorage.Plug.DiskServe do
         conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
       end
     else
-      [] -> conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-      {:error, :forbidden} -> conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
+      [] ->
+        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
+
+      {:error, {:invalid_storage_key, _, _}} ->
+        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
+
+      {:error, :forbidden} ->
+        conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
     end
   end
 

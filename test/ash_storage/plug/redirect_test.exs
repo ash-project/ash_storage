@@ -267,4 +267,39 @@ defmodule AshStorage.Plug.RedirectTest do
       end
     end
   end
+
+  describe "keys that could reach outside the store" do
+    test "answers 404 without asking the service for a URL" do
+      plug_opts = Redirect.init(service: {CapturingService, test_pid: self()})
+
+      for path_info <- [
+            ["..", "secret.txt"],
+            ["a", ".."],
+            ["../secret.txt"],
+            ["..\\secret.txt"],
+            ["/etc/passwd"],
+            ["a\0.txt"],
+            ["a\r\nx-injected: 1"]
+          ] do
+        conn = Redirect.call(%{conn(:get, "/") | path_info: path_info}, plug_opts)
+
+        assert conn.status == 404, "expected 404 for #{inspect(path_info)}"
+        assert header(conn, "location") == nil
+        assert header(conn, "x-content-type-options") == "nosniff"
+        refute_received {:url_called, _, _}
+      end
+    end
+
+    test "answers 404 before the signature is checked" do
+      assert call("/../secret.txt", secret: @secret).status == 404
+    end
+
+    test "still redirects for a key that the write-side rules now reject" do
+      plug_opts = Redirect.init(service: {CapturingService, test_pid: self()})
+      conn = Redirect.call(%{conn(:get, "/") | path_info: ["back\\slash.txt"]}, plug_opts)
+
+      assert conn.status == 302
+      assert_received {:url_called, "back\\slash.txt", _}
+    end
+  end
 end
