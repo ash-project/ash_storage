@@ -219,51 +219,76 @@ defmodule AshStorage.Service.DiskTest do
       assert Disk.url("abc/test.txt", ctx) == "http://localhost:4000/storage/abc/test.txt"
     end
 
-    test "appends :original_filename as a path segment", %{root: root} do
-      ctx =
-        Context.new(
-          root: root,
-          base_url: "http://localhost:4000/storage",
-          original_filename: "photo.svg"
-        )
-
-      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123/photo.svg"
-    end
-
-    test "omits filename segment when :original_filename is not set", %{ctx: ctx} do
+    test "omits the filename when none is known", %{ctx: ctx} do
       assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123"
     end
 
-    test "encodes slash in :original_filename to prevent path splitting", %{root: root} do
-      ctx =
-        Context.new(
-          root: root,
-          base_url: "http://localhost:4000/storage",
-          original_filename: "icons/arrow.svg"
-        )
+    test "adds the context's filename as a query parameter", %{ctx: ctx} do
+      ctx = Context.put_blob_metadata(ctx, filename: "photo.svg")
 
-      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123/icons%2Farrow.svg"
+      assert Disk.url("abc123", ctx) == "http://localhost:4000/storage/abc123?filename=photo.svg"
     end
 
-    test "signed URL with :original_filename signs over storage key only", %{root: root} do
+    test "encodes the filename so that it round-trips", %{ctx: ctx} do
+      filename = "icons/my arrow&more.svg"
+      url = Disk.url("abc123", Context.put_blob_metadata(ctx, filename: filename))
+
+      %URI{path: path, query: query} = URI.parse(url)
+      assert path == "/storage/abc123"
+      assert URI.decode_query(query) == %{"filename" => filename}
+    end
+
+    test "the :filename option wins over the context's filename", %{root: root} do
+      ctx =
+        Context.new([root: root, base_url: "/storage", filename: "chosen.png"],
+          filename: "blob.png"
+        )
+
+      assert Disk.url("abc123", ctx) == "/storage/abc123?filename=chosen.png"
+    end
+
+    test "ignores :original_filename", %{root: root} do
+      ctx = Context.new(root: root, base_url: "/storage", original_filename: "photo.svg")
+
+      assert Disk.url("abc123", ctx) == "/storage/abc123"
+    end
+
+    test "a signed URL has no filename segment and signs the storage key", %{root: root} do
       secret = "test-secret-32bytes!!!!!!!!!!!!!!"
 
       ctx =
-        Context.new(
-          root: root,
-          base_url: "http://localhost:4000/storage",
-          secret: secret,
-          original_filename: "photo.svg"
+        Context.new([root: root, base_url: "http://localhost:4000/storage", secret: secret],
+          filename: "photo.svg"
         )
 
-      url = Disk.url("abc123", ctx)
+      url = Disk.url("tenant-1/abc123", ctx)
 
-      assert url =~ "http://localhost:4000/storage/abc123/photo.svg?"
-      %URI{query: query} = URI.parse(url)
+      %URI{path: path, query: query} = URI.parse(url)
+      assert path == "/storage/tenant-1/abc123"
       params = URI.decode_query(query)
+      assert params["filename"] == "photo.svg"
       expires_at = String.to_integer(params["expires"])
-      expected_token = AshStorage.Token.sign(secret, "abc123", expires_at)
+      expected_token = AshStorage.Token.sign(secret, "tenant-1/abc123", expires_at)
       assert Plug.Crypto.secure_compare(params["token"], expected_token)
+    end
+  end
+
+  describe "file_path/2" do
+    test "returns the path of a regular file", %{ctx: ctx, root: root} do
+      File.mkdir_p!(Path.join(root, "a"))
+      File.write!(Path.join(root, "a/test.txt"), "hello")
+
+      assert {:ok, path} = Disk.file_path("a/test.txt", ctx)
+      assert File.read!(path) == "hello"
+    end
+
+    test "returns not_found for a missing file", %{ctx: ctx} do
+      assert {:error, :not_found} = Disk.file_path("nonexistent.txt", ctx)
+    end
+
+    test "returns eisdir for a directory", %{ctx: ctx, root: root} do
+      File.mkdir_p!(Path.join(root, "a"))
+      assert {:error, :eisdir} = Disk.file_path("a", ctx)
     end
   end
 
@@ -328,6 +353,12 @@ defmodule AshStorage.Service.DiskTest do
     test "stream_download/2 rejects them", %{ctx: ctx, outside: outside} do
       for key <- unsafe_keys(outside) do
         assert {:error, :einval} = Disk.stream_download(key, ctx), "key: #{key}"
+      end
+    end
+
+    test "file_path/2 rejects them", %{ctx: ctx, outside: outside} do
+      for key <- unsafe_keys(outside) do
+        assert {:error, :einval} = Disk.file_path(key, ctx), "key: #{key}"
       end
     end
 

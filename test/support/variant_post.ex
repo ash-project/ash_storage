@@ -67,6 +67,10 @@ defmodule AshStorage.Test.VariantPost do
     has_one_attached :image do
       variant(:rejected, AshStorage.Test.RejectAllVariant, generate: :eager)
     end
+
+    has_many_attached :notes do
+      variant(:eager_uppercase, AshStorage.Test.UppercaseVariant, generate: :eager)
+    end
   end
 
   attributes do
