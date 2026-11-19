@@ -24,6 +24,15 @@ defmodule AshStorage.Service do
 
         # ... implement all callbacks
       end
+
+  ## Keys
+
+  The key of a new file has passed `AshStorage.Key.validate/1` before `upload/3`
+  or `direct_upload/2` is called. A service must still not trust the keys it
+  is given. Reads and deletes pass the key stored on the blob record, which may
+  be older than those rules, and the serving plugs pass keys taken from
+  request paths after a looser check. Keep your own containment, as
+  `AshStorage.Service.Disk` does for its root.
   """
 
   alias AshStorage.Service.Context

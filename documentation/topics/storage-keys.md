@@ -142,3 +142,27 @@ end
 `"org:123"` becomes `b3JnOjEyMw`. Encoding does not hide the tenant. A tenant
 whose only problem is `/` can also be used as it is, which keeps the `/` as a
 directory level: `"#{ctx.tenant}/#{AshStorage.generate_key()}"`.
+
+## Keys are not secrets
+
+A key appears in URLs (the serving plugs address a file by its key), in logs
+and in error terms. With the default layout the tenant is part of it.
+
+- Do not put anything into a key that the people who receive the URL must not
+  see: an email address, an internal customer name, a sequential id that lets
+  others be guessed.
+- Do not rely on a key being hard to guess to protect a file. Use signed URLs
+  (the `:secret` option of the plugs and of the Disk service) or your own
+  authorization in front of the mount.
+
+## Keys in requests
+
+The serving plugs take the key from the request path. They answer `404`, without
+calling the service, for a key that is empty, contains a control character,
+starts with `/` or `\`, or has a `..` segment. They do not apply the other
+rules, so files stored before the rules existed can still be served.
+`AshStorage.Plug.Proxy` and `AshStorage.Plug.Redirect` then hand the key to the
+service, which keeps its own checks; the Disk service refuses any key that would
+resolve outside its root. `AshStorage.Plug.DiskServe` does not go through the
+Disk service: it reads the file named by the first path segment from its own
+`:root`, and follows symbolic links found there.

@@ -272,4 +272,63 @@ defmodule AshStorage.Plug.DiskServeTest do
       end
     end
   end
+
+  describe "keys that could reach outside the root" do
+    setup do
+      # root/ is the mount; secret.txt sits next to it.
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "ash_storage_disk_serve_#{System.unique_integer([:positive])}"
+        )
+
+      root = Path.join(base, "root")
+      File.mkdir_p!(Path.join(root, "tenant-1"))
+      File.write!(Path.join(root, "tenant-1/abc123"), "nested")
+      File.write!(Path.join(root, "back\\slash.txt"), "backslash")
+      File.write!(Path.join(base, "secret.txt"), "secret")
+      on_exit(fn -> File.rm_rf!(base) end)
+
+      {:ok, root: root}
+    end
+
+    defp call_with_path_info(path_info, root, opts \\ []) do
+      conn = %{conn(:get, "/") | path_info: path_info}
+      DiskServe.call(conn, DiskServe.init(Keyword.merge([root: root], opts)))
+    end
+
+    test "answers 404 instead of serving or raising", %{root: root} do
+      for path_info <- [
+            [".."],
+            ["..", "secret.txt"],
+            ["../secret.txt"],
+            ["..\\secret.txt"],
+            ["tenant-1/../../secret.txt"],
+            [Path.join(Path.dirname(root), "secret.txt")],
+            ["hello.txt\0.png"]
+          ] do
+        conn = call_with_path_info(path_info, root)
+
+        assert conn.status == 404, "expected 404 for #{inspect(path_info)}"
+        refute conn.resp_body =~ "secret"
+        assert header(conn, "x-content-type-options") == "nosniff"
+      end
+    end
+
+    test "answers 404 before the signature is checked", %{root: root} do
+      assert call_with_path_info([".."], root, secret: @secret).status == 404
+    end
+
+    test "a key that names a directory is a 404", %{root: root} do
+      assert call_with_path_info(["tenant-1"], root).status == 404
+      assert call_with_path_info(["tenant-1", "abc123"], root).status == 404
+    end
+
+    test "still serves a key that the write-side rules now reject", %{root: root} do
+      conn = call_with_path_info(["back\\slash.txt"], root)
+
+      assert conn.status == 200
+      assert conn.resp_body == "backslash"
+    end
+  end
 end
