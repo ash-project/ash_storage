@@ -380,6 +380,15 @@ mix test --include azure_integration test/ash_storage/service/azure_blob_integra
 
 The S3 suite starts MinIO with Docker. The Azure suite starts Azurite with Docker. Disk and Test service coverage run as part of the normal test suite.
 
+## Storage keys
+
+Each file is stored under a key: a random one by default, prefixed with the tenant when there is
+one, or whatever the attachment's `path` function returns. Keys are checked before anything is
+stored. A key is made of segments separated by `/`, and a segment may contain only ASCII letters,
+digits, `.`, `_` and `-`, and must not end with `.`. A key has no empty, `.` or `..` segment and
+is at most 1024 bytes long. See [Storage keys](documentation/topics/storage-keys.md) for the
+rules, for `path` functions and for tenant prefixes.
+
 ## Serving files
 
 Mount a plug to serve stored files, for example for the Disk service:

@@ -70,6 +70,8 @@ defmodule AshStorage.Operations do
   is involved yet.
 
   The blob's key follows the attachment's `path`, called with a `nil` changeset.
+  When the key breaks the rules in `AshStorage.Key`, the result is
+  `{:error, {:invalid_storage_key, reason, key}}` and no blob is created.
 
   ## Options
 
@@ -95,11 +97,10 @@ defmodule AshStorage.Operations do
       checksum = Keyword.get(arg_opts, :checksum, "")
       metadata = Keyword.get(arg_opts, :metadata, %{})
 
-      key = AshStorage.resolve_key(attachment_def, ctx, nil)
-
       blob_resource = Info.storage_blob_resource!(resource)
 
-      with {:ok, blob} <-
+      with {:ok, key} <- AshStorage.resolve_key(attachment_def, ctx, nil),
+           {:ok, blob} <-
              Ash.create(
                blob_resource,
                %{

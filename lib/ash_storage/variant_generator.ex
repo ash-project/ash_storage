@@ -79,7 +79,6 @@ defmodule AshStorage.VariantGenerator do
          attachment_def,
          action_opts \\ []
        ) do
-    key = AshStorage.resolve_variant_key(source_blob.key)
     checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
     byte_size = byte_size(variant_data)
 
@@ -111,7 +110,8 @@ defmodule AshStorage.VariantGenerator do
 
     blob_resource = Info.storage_blob_resource!(resource)
 
-    with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
+    with {:ok, key} <- AshStorage.resolve_variant_key(source_blob.key),
+         {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
       blob_attrs =
         %{
           key: key,

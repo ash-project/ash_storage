@@ -102,3 +102,67 @@ results =
     AshStorage.Operations.attach(record, name, io, opts)
   end)
 ```
+
+## Storage keys are now validated, with more restrictive rules than before
+
+What changed: the key of every new file is checked by `AshStorage.Key.validate/1`
+before anything is uploaded and before a blob record is created. A key is made
+of segments separated by `/`, and a segment may contain only ASCII letters,
+digits, `.`, `_` and `-`, and must not end with `.`. A key must be 1 to 1024
+bytes long, must not start or end with `/`, and must have no empty, `.` or `..`
+segment. A key that breaks a rule is rejected, never rewritten. See
+[Storage keys](storage-keys.md).
+
+Who this affects:
+
+- An attachment whose `path` function returns such a key. Attaching, file
+  arguments and `AshStorage.Operations.prepare_direct_upload/3` now fail with
+  `{:invalid_storage_key, reason, key}` instead of storing the file. Typical
+  causes are a file name or another value from a user in the key (a
+  space, a non-ASCII letter, a backslash), a leading `/`, or an empty
+  interpolated value that leaves `//` or a trailing `/` in the key.
+- Variants of a file whose stored key breaks a rule before its last segment,
+  for example `org:123/3f9a` or `/3f9a`. A variant's key is the source's
+  key with the last segment replaced, so it is rejected too and the variant is
+  not generated. A source key that breaks a rule only in its last segment
+  still gets variants.
+- Callers of `AshStorage.resolve_key/3` and `AshStorage.resolve_variant_key/1`,
+  which now return `{:ok, key}` or `{:error, error}` instead of the key.
+
+Files that are already stored keep their keys. The keys are not checked again,
+and the files can still be read, served and purged as before.
+
+What to do: make the `path` function return a valid key. Leave values that come
+from a user out of it, or make them safe first; see
+[Values from user input](storage-keys.md#values-from-user-input).
+
+## A tenant must work as one key segment
+
+This affects attachments without a `path` function on resources that use
+multitenancy.
+
+What changed: the tenant is the first segment of the key, `<tenant>/<key>`.
+Before, it was joined to the key as it was, so the tenant `"acme/eu"` produced
+two segments and `".."` pointed outside the store. Now a tenant that contains
+`/` or any character other than ASCII letters, digits, `.`, `_` and `-`, or that
+is `.` or `..` or ends with `.`, fails the operation with
+`{:invalid_storage_key, {:tenant, reason}, tenant}`. It is not encoded. UUIDs,
+integers and names such as `org_42` are fine; `org:123`, an email address or a
+name with a space are not.
+
+What to do: add a `path` function that builds the key from the tenant. For
+tenants that contain `/` and are otherwise valid, this one keeps the old layout:
+
+```elixir
+has_one_attached :avatar do
+  path fn ctx, _changeset -> "#{ctx.tenant}/#{AshStorage.generate_key()}" end
+end
+```
+
+`ctx.tenant` is the tenant as it was given to the action. If that is a struct,
+convert it first with `Ash.ToTenant.to_tenant(ctx.tenant, ctx.resource)`.
+
+For tenants with other characters the old layout cannot be kept. Map the tenant
+to a valid segment, as [Tenant prefixes](storage-keys.md#tenant-prefixes)
+shows. New files then go under the new prefix. Files that are already stored
+keep their keys and are still found, because the key is on the blob record.

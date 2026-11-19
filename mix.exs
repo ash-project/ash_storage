@@ -75,6 +75,7 @@ defmodule AshStorage.MixProject do
         "documentation/topics/variants.md",
         "documentation/topics/file-arguments.md",
         "documentation/topics/direct-uploads.md",
+        "documentation/topics/storage-keys.md",
         "documentation/topics/serving.md",
         "documentation/topics/checksum-verification.md",
         "documentation/topics/migrating-to-1.0.md",
@@ -121,6 +122,7 @@ defmodule AshStorage.MixProject do
           AshStorage.Plug.Redirect
         ],
         Utilities: [
+          AshStorage.Key,
           AshStorage.Token
         ],
         Introspection: [

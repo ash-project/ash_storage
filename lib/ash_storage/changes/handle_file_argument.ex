@@ -86,9 +86,9 @@ defmodule AshStorage.Changes.HandleFileArgument do
     with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
          {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
       ctx = build_context(service_opts, resource, attachment_def, changeset)
-      key = AshStorage.resolve_key(attachment_def, ctx, changeset)
 
-      with {:ok, blob} <-
+      with {:ok, key} <- AshStorage.resolve_key(attachment_def, ctx, changeset),
+           {:ok, blob} <-
              upload_and_create_blob(resource, service_mod, ctx, file, context_opts,
                key: key,
                filename: filename,
