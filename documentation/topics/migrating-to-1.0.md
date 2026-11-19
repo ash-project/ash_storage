@@ -80,3 +80,25 @@ WHERE record_type = 'Elixir.MyApp.Post';
 A record that was given a new file after the rename has a row under each value.
 After the update both rows belong to it again, so for a `has_one_attached`
 remove the one you do not want first.
+
+## `AshStorage.Transformer` and `Operations.attach_many/1` are removed
+
+`AshStorage.Transformer` was unused, so it was removed until a clear use case
+for it is established. To produce a variant, implement 
+`AshStorage.Variant`: its `transform/3` takes the same arguments and returns 
+`{:ok, metadata}` instead of `:ok`, and it has an `accept?/1` callback for the 
+content types it handles.
+
+`AshStorage.Operations.attach_many/1` was removed because its implementation
+did not actually match the stated semantics, i.e. it simply called `attach/4`
+on each item individually, rather than actually optimizing for a bulk import.
+We may add this API back once proper bulk import semantics can be established.
+For migrating, simply replace calls of `attach_many/1` with the following,
+which is equivalent:
+
+```elixir
+results =
+  Enum.map(items, fn {record, name, io, opts} ->
+    AshStorage.Operations.attach(record, name, io, opts)
+  end)
+```

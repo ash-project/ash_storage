@@ -379,22 +379,6 @@ defmodule AshStorage.Operations do
     end
   end
 
-  @doc """
-  Attach multiple files to multiple records in bulk.
-
-  Takes a list of `{record, attachment_name, io, opts}` tuples and processes them.
-  Returns a list of results in the same order as the input.
-  """
-  def attach_many(items) do
-    items
-    |> Enum.with_index()
-    |> Enum.map(fn {{record, attachment_name, io, opts}, idx} ->
-      {idx, attach(record, attachment_name, io, opts)}
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(&elem(&1, 1))
-  end
-
   # -- Functions used by HandleDependentAttachments --
 
   @doc false

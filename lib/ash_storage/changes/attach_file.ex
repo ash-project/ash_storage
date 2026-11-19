@@ -73,7 +73,7 @@ defmodule AshStorage.Changes.AttachFile do
         match?(%Ash.Type.File{}, Ash.Changeset.get_argument(changeset, argument))
       end)
 
-    # Build bulk attach items
+    # Build the attach items
     attach_items =
       Enum.map(to_attach, fn {{changeset, result}, _idx} ->
         file = Ash.Changeset.get_argument(changeset, argument)
@@ -85,10 +85,13 @@ defmodule AshStorage.Changes.AttachFile do
         {result, attachment, file, attach_opts}
       end)
 
-    # Bulk attach
-    attach_results = AshStorage.Operations.attach_many(attach_items)
+    # Attach one at a time, in input order
+    attach_results =
+      Enum.map(attach_items, fn {record, attachment, file, attach_opts} ->
+        AshStorage.Operations.attach(record, attachment, file, attach_opts)
+      end)
 
-    # Map bulk results back, converting {:ok, _attach_result} to {:ok, record}
+    # Map the results back, converting {:ok, _attach_result} to {:ok, record}
     indexed_attach_results =
       Enum.zip(to_attach, attach_results)
       |> Enum.map(fn {{{_changeset, result}, idx}, attach_result} ->
