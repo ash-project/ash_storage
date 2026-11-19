@@ -228,3 +228,53 @@ content type.
 Replace a symbolic link that leads outside the root, or that has an absolute
 target, with a relative link that stays inside the root, or with a copy of the
 file. See [Keys in requests](storage-keys.md#keys-in-requests).
+
+## Signed URLs use a new token
+
+What changed: a signed URL carries one `token` parameter,
+`?token=v1.<payload>.<signature>`, in place of `?token=…&expires=…`. The token
+holds the storage key, the issue time, the expiry and, when they are set, the
+disposition, the filename and the content type, and it is bound to the
+`download` purpose. `AshStorage.Plug.Proxy`, `AshStorage.Plug.Redirect` and
+`AshStorage.Plug.DiskServe` accept only this format. On a signed mount they
+take the disposition, the filename and the content type from the token and
+ignore the `disposition` and `filename` query parameters.
+`AshStorage.Token.sign(secret, key, expires_at)` is removed; `sign/3` now takes
+a map of claims, and `verify/3` checks a token.
+
+Who this affects: every application with a `:secret` on a serving plug or on
+the Disk service. Signed URLs issued before the upgrade get `403`; by default
+they last an hour. During a rolling deploy, instances on the old and the new
+version reject each other's URLs. Code that called `Token.sign/3` with a
+secret, a key and an expiry, or that added `disposition` or `filename` to a
+signed URL by hand, also has to change.
+
+What to do: deploy all instances together, or accept that signed URLs fail
+for up to their lifetime. Build URLs with `AshStorage.Token.signed_url/4` and
+pass the response parameters to it instead of appending them:
+
+```elixir
+AshStorage.Token.signed_url("/files/#{key}", secret, key,
+  disposition: "attachment",
+  filename: "report.pdf",
+  content_type: "application/pdf"
+)
+```
+
+## Signed Disk URLs carry the blob's content type
+
+What changed: when the Disk service has a `:secret`, the URLs from the URL
+calculations sign the blob's recorded content type, and
+`AshStorage.Plug.DiskServe` uses it before the extension of the filename or the
+key. Before, only those extensions counted, so a file with a generated key and
+no extension in its filename never rendered inline.
+
+Who this affects: signed `AshStorage.Plug.DiskServe` mounts with `:inline`.
+Files whose recorded content type is in the mount's `:inline` list now render
+inline, also when their key and filename have no extension.
+
+What to do: nothing, if that is what the `:inline` list is meant to allow. The
+recorded type is what the uploader declared, and `nosniff` keeps the browser
+from reading the file as anything else; the mount's `:inline` list still
+decides what renders. Narrow the list if it allows more than you want to
+render.

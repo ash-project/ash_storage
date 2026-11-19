@@ -21,8 +21,10 @@ defmodule AshStorage.Plug.DiskServe do
   ## Options
 
   - `:root` - (required) the root directory where files are stored
-  - `:secret` - secret key for verifying signed URLs. When set, requests
-    without a valid signature are rejected with 403.
+  - `:secret` - the secret for verifying signed URLs: a binary, a list of
+    binaries (for rotation), or a zero-arity function or `{module, function, args}`
+    that returns one. When set, a request without a valid `token` parameter for
+    its key gets `403`. See [Signed URLs](serving.md#signed-urls).
   - `:inline` - content types that may render in the browser: `:none` (default),
     `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
     Every other type is sent as a download.
@@ -33,9 +35,12 @@ defmodule AshStorage.Plug.DiskServe do
 
   Every response carries `X-Content-Type-Options: nosniff`, and only `GET` and
   `HEAD` are answered (`405` otherwise). A file is sent with
-  `Content-Disposition: attachment` unless its content type is in `:inline`;
-  `?disposition=attachment` forces a download and `?filename=` sets the download
-  name, but a request cannot make a file render inline.
+  `Content-Disposition: attachment` unless its content type is in `:inline`.
+
+  On a signed mount the token decides: it may force a download and set the
+  download name, and the `disposition` and `filename` query parameters are
+  ignored. On an unsigned mount `?disposition=attachment` forces a download and
+  `?filename=` sets the download name. Neither can make a file render inline.
 
   ## Keys
 
@@ -50,16 +55,22 @@ defmodule AshStorage.Plug.DiskServe do
 
   ## Content type
 
-  The content type comes from the extension of `?filename=`, else from the
-  key. The `filename` parameter is chosen by whoever makes the request and is
-  not covered by the signature, so listing an active type such as `text/html`
-  or `image/svg+xml` in `:inline` lets a requester render any file on the
-  mount as that type. See [Serving files](serving.md).
+  On a signed mount the content type comes from the token's content type, else
+  from the extension of the token's filename, else from the key. The Disk
+  service signs the blob's recorded content type and filename, so `:inline`
+  also works for generated keys.
+
+  On an unsigned mount it comes from the extension of `?filename=`, else from
+  the key. That parameter is chosen by whoever makes the request, so listing an
+  active type such as `text/html` or `image/svg+xml` in `:inline` on an
+  unsigned mount lets a requester render any file on it as that type. See
+  [Serving files](serving.md).
   """
 
   @behaviour Plug
 
   alias AshStorage.Plug.ResponseMetadata
+  alias AshStorage.Plug.SignedRequest
   alias AshStorage.Service.Context
   alias AshStorage.Service.Disk
 
@@ -67,10 +78,10 @@ defmodule AshStorage.Plug.DiskServe do
   def init(opts) do
     root = Keyword.fetch!(opts, :root)
 
-    Map.merge(ResponseMetadata.init(opts), %{
-      root: root,
-      secret: Keyword.get(opts, :secret)
-    })
+    opts
+    |> ResponseMetadata.init()
+    |> Map.merge(SignedRequest.init(opts))
+    |> Map.put(:root, root)
   end
 
   @impl true
@@ -87,17 +98,20 @@ defmodule AshStorage.Plug.DiskServe do
     key = Enum.join(conn.path_info, "/")
 
     with :ok <- AshStorage.Key.validate_lookup(key),
-         :ok <- verify_signature(conn, key, opts),
+         {:ok, access} <- signed_request(conn, key, opts),
          {:ok, path} <- Disk.file_path(key, Context.new(root: opts.root)) do
+      request = ResponseMetadata.request_params(conn, access)
+
       content_type =
         ResponseMetadata.content_type(
-          filename: ResponseMetadata.request_overrides(conn).filename,
+          declared: request.content_type,
+          filename: request.filename,
           key: key,
           fallback: opts.content_type_fallback
         )
 
       conn
-      |> ResponseMetadata.put_file_headers(content_type, opts.inline)
+      |> ResponseMetadata.put_file_headers(content_type, opts.inline, request)
       |> Plug.Conn.send_file(200, path)
       |> Plug.Conn.halt()
     else
@@ -111,24 +125,10 @@ defmodule AshStorage.Plug.DiskServe do
     end
   end
 
-  defp verify_signature(_conn, _key, %{secret: nil}), do: :ok
-
-  defp verify_signature(conn, key, %{secret: secret}) do
-    params = Plug.Conn.fetch_query_params(conn).query_params
-
-    with token when is_binary(token) <- params["token"],
-         expires when is_binary(expires) <- params["expires"],
-         {expires_at, ""} <- Integer.parse(expires),
-         true <- expires_at > System.system_time(:second) do
-      expected = AshStorage.Token.sign(secret, key, expires_at)
-
-      if Plug.Crypto.secure_compare(token, expected) do
-        :ok
-      else
-        {:error, :forbidden}
-      end
-    else
-      _ -> {:error, :forbidden}
+  defp signed_request(conn, key, opts) do
+    case SignedRequest.verify(conn, key, opts) do
+      {:ok, access} -> {:ok, access}
+      {:error, _reason} -> {:error, :forbidden}
     end
   end
 end

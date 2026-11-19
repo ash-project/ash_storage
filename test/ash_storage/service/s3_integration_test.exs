@@ -272,8 +272,6 @@ defmodule AshStorage.Service.S3IntegrationTest do
       key = unique_key()
       S3.upload(key, "signed proxy data", ctx())
       secret = "proxy-test-secret"
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(secret, key, expires)
 
       plug_opts =
         AshStorage.Plug.Proxy.init(
@@ -282,10 +280,7 @@ defmodule AshStorage.Service.S3IntegrationTest do
         )
 
       conn =
-        Plug.Test.conn(
-          :get,
-          "/#{key}?token=#{URI.encode_www_form(token)}&expires=#{expires}"
-        )
+        Plug.Test.conn(:get, AshStorage.Token.signed_url("/#{key}", secret, key))
         |> Plug.Conn.fetch_query_params()
         |> AshStorage.Plug.Proxy.call(plug_opts)
 

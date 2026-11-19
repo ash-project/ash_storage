@@ -5,6 +5,8 @@ defmodule AshStorage.Plug.DiskServeTest do
 
   alias AshStorage.Plug.DiskServe
 
+  import AshStorage.Test.SignedUrls
+
   @root Path.join(
           System.tmp_dir!(),
           "ash_storage_disk_serve_test_#{System.unique_integer([:positive])}"
@@ -96,41 +98,25 @@ defmodule AshStorage.Plug.DiskServeTest do
   describe "signed URLs" do
     @secret "test-secret-32bytes!!!!!!!!!!!!!!"
 
-    test "rejects requests without token" do
-      conn = call("/hello.txt", secret: @secret)
-      assert conn.status == 403
-    end
-
-    test "rejects requests with invalid token" do
-      conn =
-        conn(:get, "/hello.txt?token=invalid&expires=#{System.system_time(:second) + 3600}")
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
-
-      assert conn.status == 403
-    end
-
-    test "rejects expired tokens" do
-      expired = System.system_time(:second) - 10
-      token = AshStorage.Token.sign(@secret, "hello.txt", expired)
-
-      conn =
-        conn(:get, "/hello.txt?token=#{token}&expires=#{expired}")
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
-
-      assert conn.status == 403
-    end
-
-    test "serves file with valid token" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "hello.txt", expires)
-
-      conn =
-        conn(:get, "/hello.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
+    test "serves a file with a valid token" do
+      conn = call(signed_path("hello.txt", @secret), secret: @secret)
 
       assert conn.status == 200
       assert conn.resp_body == "hello world"
+    end
+
+    test "rejects a missing, a malformed and another key's token" do
+      for path <- ["/hello.txt", "/hello.txt?token=garbage", signed_path("other.txt", @secret)] do
+        path = String.replace(path, "/other.txt", "/hello.txt")
+        conn = call(path, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{path}"
+        assert conn.resp_body == "Forbidden"
+      end
+    end
+
+    test "an unsigned mount ignores a token parameter" do
+      assert call("/hello.txt?token=garbage").status == 200
     end
 
     test "serves a URL from Disk.url/2 with a filename" do
@@ -144,19 +130,47 @@ defmodule AshStorage.Plug.DiskServeTest do
       assert conn.status == 200
       assert conn.resp_body == "<svg/>"
       assert header(conn, "content-type") =~ "image/svg+xml"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="image.svg")
     end
 
     test "the token covers the whole key, not its first segment" do
       root = tenant_root()
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "tenant1", expires)
 
-      conn =
-        conn(:get, "/tenant1/abc123?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> DiskServe.call(DiskServe.init(root: root, secret: @secret))
+      path =
+        "/tenant1/abc123?" <>
+          (signed_path("tenant1", @secret) |> URI.parse() |> Map.fetch!(:query))
+
+      conn = call(path, root: root, secret: @secret)
 
       assert conn.status == 403
       refute conn.resp_body =~ "hello"
+    end
+
+    test "a requester cannot choose the content type (#68)" do
+      File.write!(Path.join(@root, "flatkey"), "<script>alert(1)</script>")
+      ctx = AshStorage.Service.Context.new(root: @root, base_url: "", secret: @secret)
+      opts = [secret: @secret, inline: ["text/html", "image/png"]]
+      "/flatkey?" <> query = AshStorage.Service.Disk.url("flatkey", ctx)
+
+      conn = call("/flatkey/x.html?" <> query, opts)
+      assert conn.status == 403
+      refute conn.resp_body =~ "script"
+
+      conn = call("/flatkey?" <> query <> "&filename=x.html", opts)
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "application/octet-stream"
+      assert header(conn, "content-disposition") == "attachment"
+    end
+
+    test "the mount's :inline list stays the ceiling for a signed content type" do
+      conn =
+        call(signed_path(@hex_key, @secret, content_type: "text/html"),
+          secret: @secret,
+          inline: :images
+        )
+
+      assert header(conn, "content-type") =~ "text/html"
+      assert header(conn, "content-disposition") == "attachment"
     end
   end
 
@@ -219,21 +233,6 @@ defmodule AshStorage.Plug.DiskServeTest do
     test "a request cannot widen the policy" do
       conn = call("/#{@hex_key}?filename=evil.html&disposition=inline", inline: :images)
       assert header(conn, "content-disposition") == ~s(attachment; filename="evil.html")
-    end
-
-    test "a signed URL with an HTML name added still downloads" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, @hex_key, expires)
-
-      conn =
-        call(
-          "/#{@hex_key}?token=#{URI.encode_www_form(token)}&expires=#{expires}&filename=x.html",
-          secret: @secret
-        )
-
-      assert conn.status == 200
-      assert header(conn, "content-type") =~ "text/html"
-      assert header(conn, "content-disposition") == ~s(attachment; filename="x.html")
     end
 
     test "a filename without a known extension falls back to the key" do

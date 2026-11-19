@@ -5,6 +5,8 @@ defmodule AshStorage.Plug.ProxyTest do
 
   alias AshStorage.Plug.Proxy
 
+  import AshStorage.Test.SignedUrls
+
   defmodule RecordingService do
     @moduledoc false
     # Tells the test process about every download it is asked for.
@@ -57,12 +59,6 @@ defmodule AshStorage.Plug.ProxyTest do
     end
   end
 
-  defp signed_path(key, secret) do
-    expires = System.system_time(:second) + 3600
-    token = AshStorage.Token.sign(secret, key, expires)
-    "/#{key}?token=#{URI.encode_www_form(token)}&expires=#{expires}"
-  end
-
   describe "proxying files" do
     test "serves file from storage service" do
       ctx = AshStorage.Service.Context.new([])
@@ -99,34 +95,70 @@ defmodule AshStorage.Plug.ProxyTest do
   describe "signed URLs" do
     @secret "proxy-secret-key-32bytes!!!!!!!!"
 
-    test "rejects requests without token" do
-      ctx = AshStorage.Service.Context.new([])
-      AshStorage.Service.Test.upload("secret.txt", "secret data", ctx)
+    test "serves a file with a valid token" do
+      upload("secret.txt", "secret data")
 
-      conn = call("/secret.txt", secret: @secret)
-      assert conn.status == 403
-    end
-
-    test "serves file with valid token" do
-      ctx = AshStorage.Service.Context.new([])
-      AshStorage.Service.Test.upload("secret.txt", "secret data", ctx)
-
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "secret.txt", expires)
-
-      plug_opts =
-        Proxy.init(
-          service: {AshStorage.Service.Test, []},
-          secret: @secret
-        )
-
-      conn =
-        conn(:get, "/secret.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> Proxy.call(plug_opts)
-
+      conn = call(signed_path("secret.txt", @secret), secret: @secret)
       assert conn.status == 200
       assert conn.resp_body == "secret data"
+    end
+
+    test "rejects a missing, a malformed and another key's token without a download" do
+      service = {RecordingService, test_pid: self()}
+
+      for path <- ["/secret.txt", "/secret.txt?token=garbage", signed_path("other.txt", @secret)] do
+        path = String.replace(path, "/other.txt", "/secret.txt")
+        conn = call(path, service: service, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{path}"
+        assert conn.resp_body == "Forbidden"
+        refute_received {:download_called, _}
+      end
+    end
+
+    test "an unsigned mount ignores a token parameter" do
+      upload("file.txt")
+
+      assert call("/file.txt?token=garbage").status == 200
+    end
+
+    test "parameters added to a signed URL do not change the response (#68)" do
+      upload("page.html", "<script>alert(1)</script>")
+      added = "&disposition=attachment&filename=#{URI.encode_www_form(~s(a.txt"; x="y))}"
+
+      conn = call(signed_path("page.html", @secret) <> added, secret: @secret)
+      assert conn.status == 200
+      assert header(conn, "content-disposition") == "attachment"
+
+      signed = signed_path("page.html", @secret, disposition: "attachment", filename: "page.html")
+
+      for path <- [signed, signed <> "&filename=invoice.pdf"] do
+        conn = call(path, secret: @secret, inline: ["text/html"])
+        assert header(conn, "content-disposition") == ~s(attachment; filename="page.html")
+      end
+    end
+
+    test "the content type comes from the token" do
+      upload("abc123")
+
+      path = signed_path("abc123", @secret, content_type: "image/png")
+
+      conn = call(path, secret: @secret, inline: :images)
+      assert header(conn, "content-type") =~ "image/png"
+      assert header(conn, "content-disposition") == "inline"
+
+      conn = call(path, secret: @secret)
+      assert header(conn, "content-type") =~ "image/png"
+      assert header(conn, "content-disposition") == "attachment"
+
+      conn =
+        call(signed_path("abc123", @secret, filename: "photo.png"),
+          secret: @secret,
+          inline: :images
+        )
+
+      assert header(conn, "content-type") =~ "image/png"
+      assert header(conn, "content-disposition") == ~s(inline; filename="photo.png")
     end
   end
 

@@ -145,17 +145,34 @@ defmodule AshStorage.Plug.ResponseMetadata do
 
   def sanitize_filename(_filename), do: nil
 
-  @spec request_overrides(Plug.Conn.t()) :: %{
+  @type request_params :: %{
           disposition: :attachment | nil,
-          filename: String.t() | nil
+          filename: String.t() | nil,
+          content_type: String.t() | nil
         }
-  def request_overrides(conn) do
+
+  # On a signed mount the values come from the token's claims and the query is
+  # ignored, so a URL holder cannot change them. On an unsigned mount they come
+  # from the query; there they can only narrow, because the mount's `:inline`
+  # list stays the ceiling.
+  @spec request_params(Plug.Conn.t(), AshStorage.Plug.SignedRequest.access()) ::
+          request_params()
+  def request_params(conn, :unsigned) do
     params = Plug.Conn.fetch_query_params(conn).query_params
 
     # Only an exact "attachment" narrows; any other value, including "inline", is ignored.
     %{
       disposition: if(params["disposition"] == "attachment", do: :attachment),
-      filename: sanitize_filename(params["filename"])
+      filename: sanitize_filename(params["filename"]),
+      content_type: nil
+    }
+  end
+
+  def request_params(_conn, claims) when is_map(claims) do
+    %{
+      disposition: if(claims["d"] == "attachment", do: :attachment),
+      filename: sanitize_filename(claims["f"]),
+      content_type: if(is_binary(claims["t"]), do: claims["t"])
     }
   end
 
@@ -165,9 +182,9 @@ defmodule AshStorage.Plug.ResponseMetadata do
   end
 
   # sobelow_skip ["XSS.ContentType"]
-  @spec put_file_headers(Plug.Conn.t(), String.t(), inline_types()) :: Plug.Conn.t()
-  def put_file_headers(conn, content_type, inline_types) do
-    request = request_overrides(conn)
+  @spec put_file_headers(Plug.Conn.t(), String.t(), inline_types(), request_params()) ::
+          Plug.Conn.t()
+  def put_file_headers(conn, content_type, inline_types, request) do
     disposition = disposition(content_type, inline_types, request.disposition)
 
     conn

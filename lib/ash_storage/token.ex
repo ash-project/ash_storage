@@ -87,10 +87,9 @@ defmodule AshStorage.Token do
   @type verify_error :: :invalid | :wrong_purpose | :expired | :lifetime_exceeded
 
   @doc """
-  Signs a map of claims, or, with a binary secret, a key and an expiry time.
+  Signs a map of claims and returns a token of the format described above.
 
-  With a map of claims, returns a token of the format described above. The
-  claims must have string names, must be claims of the purpose, and must not
+  The claims must have string names, must be claims of the purpose, and must not
   be `p`, `i` or `e`, which are set from the options. A claim whose value is
   `nil` is left out.
 
@@ -110,19 +109,8 @@ defmodule AshStorage.Token do
       iex> {:ok, claims} = AshStorage.Token.verify(token, "secret", purpose: :download)
       iex> claims["s"]
       "covers/3f9a"
-
-  `sign(secret, key, expires_at)` returns the HMAC of `"\#{key}:\#{expires_at}"`,
-  the signature that `signed_url/4` puts in a URL.
   """
   @spec sign(claims(), secret(), keyword()) :: String.t()
-  @spec sign(String.t(), String.t(), integer()) :: String.t()
-  def sign(secret, key, expires_at) when is_binary(secret) and is_integer(expires_at) do
-    message = "#{key}:#{expires_at}"
-
-    :crypto.mac(:hmac, :sha256, secret, message)
-    |> Base.url_encode64(padding: false)
-  end
-
   def sign(claims, secret, opts) do
     purpose = purpose!(opts)
     claims = claims!(claims, purpose)
@@ -186,31 +174,69 @@ defmodule AshStorage.Token do
   end
 
   @doc """
-  Build a signed URL by appending token and expires query parameters.
+  Returns `base_url` with a `download` token for `key` in the `token` query
+  parameter.
+
+  `base_url` must not have a query. The token covers the key and the options
+  below, so a holder of the URL cannot change them; query parameters added to
+  the URL are ignored by the serving plugs.
 
   ## Options
 
-  - `:expires_in` - seconds until expiration (default: 3600)
-  - `:disposition` - `"attachment"` to force download
-  - `:filename` - filename for Content-Disposition header
+  - `:expires_in` - seconds until the URL expires (default: `3600`)
+  - `:disposition` - `"attachment"` or `:attachment` forces a download;
+    `"inline"`, `:inline` and `nil` leave the decision to the mount
+  - `:filename` - the download name; the serving plugs also guess the content
+    type from its extension
+  - `:content_type` - the content type of the file
+
+  A mount serves a file inline only when its content type is in the mount's
+  `:inline` list, whatever the token says.
+
+  Raises `ArgumentError` when an option is invalid, or when the secret is not
+  one of the forms above.
+
+  ## Examples
+
+      iex> url = AshStorage.Token.signed_url("/files/covers/3f9a", "secret", "covers/3f9a")
+      iex> String.starts_with?(url, "/files/covers/3f9a?token=v1.")
+      true
   """
-  @spec signed_url(String.t(), String.t(), String.t(), keyword()) :: String.t()
+  @spec signed_url(String.t(), secret(), String.t(), keyword()) :: String.t()
   def signed_url(base_url, secret, key, opts \\ []) do
-    expires_in = Keyword.get(opts, :expires_in, 3600)
-    expires_at = System.system_time(:second) + expires_in
-    token = sign(secret, key, expires_at)
+    # Checked in the body, not in guards: a `FunctionClauseError` would show the
+    # arguments, and with the arguments swapped one of them is the secret.
+    unless is_binary(base_url), do: raise(ArgumentError, "expected base_url to be a string")
+    unless is_binary(key), do: raise(ArgumentError, "expected key to be a string")
+    unless is_list(opts), do: raise(ArgumentError, "expected a keyword list of options")
 
-    query =
-      [{"token", token}, {"expires", to_string(expires_at)}]
-      |> maybe_add("disposition", Keyword.get(opts, :disposition))
-      |> maybe_add("filename", Keyword.get(opts, :filename))
-      |> URI.encode_query()
+    claims = %{
+      "s" => key,
+      "d" => disposition_claim!(Keyword.get(opts, :disposition)),
+      "f" => string_claim!(:filename, Keyword.get(opts, :filename)),
+      "t" => string_claim!(:content_type, Keyword.get(opts, :content_type))
+    }
 
-    "#{base_url}?#{query}"
+    token = sign(claims, secret, purpose: :download, expires_in: Keyword.get(opts, :expires_in))
+
+    # The token is base64url and `.`, so it needs no encoding in a query.
+    base_url <> "?token=" <> token
   end
 
-  defp maybe_add(params, _key, nil), do: params
-  defp maybe_add(params, key, value), do: params ++ [{key, to_string(value)}]
+  defp disposition_claim!(value) when value in ["attachment", :attachment], do: "attachment"
+  defp disposition_claim!(value) when value in [nil, "inline", :inline], do: nil
+
+  defp disposition_claim!(value) do
+    raise ArgumentError,
+          "invalid :disposition option #{inspect(value)}. Expected \"attachment\" or \"inline\""
+  end
+
+  defp string_claim!(_option, value) when value in [nil, ""], do: nil
+  defp string_claim!(_option, value) when is_binary(value), do: value
+
+  defp string_claim!(option, value) do
+    raise ArgumentError, "invalid #{inspect(option)} option #{inspect(value)}. Expected a string"
+  end
 
   defp signature(secret, data) do
     :crypto.mac(:hmac, :sha256, secret, data) |> Base.url_encode64(padding: false)

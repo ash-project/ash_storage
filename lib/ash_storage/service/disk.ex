@@ -12,18 +12,28 @@ defmodule AshStorage.Service.Disk do
   default they are sent as downloads; see the plug's `:inline` option and
   [Serving files](serving.md).
 
-  `url/2` returns `<base_url>/<key>`. When a filename is known, from the
-  `:filename` option or the context's `:filename` (the URL calculations set it
-  to the blob's filename), it is added as a `filename` query parameter, which
-  the plug uses for the download name and to guess the content type.
+  Without a `:secret`, `url/2` returns `<base_url>/<key>`. When a filename is
+  known, from the `:filename` option or the context's `:filename` (the URL
+  calculations set it to the blob's filename), it is added as a `filename`
+  query parameter, which the plug uses for the download name and to guess the
+  content type.
+
+  With a `:secret`, `url/2` returns `<base_url>/<key>?token=…`, built by
+  `AshStorage.Token.signed_url/4`. The token covers the key and, when they are
+  known, the filename, the content type (the `:content_type` option, else the
+  context's `:content_type`, which the URL calculations set to the blob's) and
+  a `:disposition` option of `"attachment"`. Mount the plug with the same
+  `:secret`.
 
   ## Options
 
   - `:root` - (required) the root directory for file storage
   - `:base_url` - (required for `url/2`) the base URL for serving files
-  - `:secret` - secret key for generating signed URLs. When set, `url/2`
-    returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
-    plug will verify before serving files.
+  - `:secret` - the secret for signing URLs: a binary, a list of binaries
+    (signs with the first, for rotation), or a zero-arity function or
+    `{module, function, args}` that returns one and is called on every
+    `url/2`. When set, `url/2` returns signed URLs that
+    `AshStorage.Plug.DiskServe` verifies. See [Signed URLs](serving.md#signed-urls).
   - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
   - `:owner_only` - when `true` (the default), files are written with mode
     `0600` and directories are created with mode `0700`. Set it to `false` to
@@ -244,13 +254,12 @@ defmodule AshStorage.Service.Disk do
           else: plain_url
 
       secret ->
-        sign_opts =
-          []
-          |> maybe_put(:expires_in, Keyword.get(opts, :expires_in))
-          |> maybe_put(:disposition, Keyword.get(opts, :disposition))
-          |> maybe_put(:filename, filename)
-
-        AshStorage.Token.signed_url(plain_url, secret, key, sign_opts)
+        AshStorage.Token.signed_url(plain_url, secret, key,
+          expires_in: Keyword.get(opts, :expires_in),
+          disposition: Keyword.get(opts, :disposition),
+          filename: filename,
+          content_type: present(Keyword.get(opts, :content_type)) || present(ctx.content_type)
+        )
     end
   end
 
@@ -271,9 +280,6 @@ defmodule AshStorage.Service.Disk do
        }
      }}
   end
-
-  defp maybe_put(keyword, _key, nil), do: keyword
-  defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
   defp verify_md5(_data, nil), do: :ok
 
