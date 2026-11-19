@@ -24,26 +24,52 @@ defmodule AshStorage.Plug.Proxy do
 
   - `:service` - (required) the `{module, opts}` tuple for the storage service
   - `:secret` - secret key for verifying signed URLs
-  - `:content_type_fallback` - default Content-Type (default: `"application/octet-stream"`)
+  - `:inline` - content types that may render in the browser: `:none` (default),
+    `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
+    Every other type is sent as a download.
+  - `:content_type_fallback` - Content-Type used when the key has no recognisable
+    extension (default: `"application/octet-stream"`)
+
+  ## Response headers
+
+  Every response carries `X-Content-Type-Options: nosniff`, and only `GET` and
+  `HEAD` are answered (`405` otherwise). A file is sent with
+  `Content-Disposition: attachment` unless its content type is in `:inline`;
+  `?disposition=attachment` forces a download and `?filename=` sets the download
+  name, but a request cannot make a file render inline.
+
+  The content type comes from the key's extension. Generated keys have none, so
+  on this plug `:inline` only takes effect for keys with an extension, or through
+  `:content_type_fallback` on a mount that holds one kind of file. See
+  [Serving files](serving.md).
   """
 
   @behaviour Plug
+
+  alias AshStorage.Plug.ResponseMetadata
 
   @impl true
   def init(opts) do
     {service_mod, service_opts} = Keyword.fetch!(opts, :service)
 
-    %{
+    Map.merge(ResponseMetadata.init(opts), %{
       service_mod: service_mod,
       service_opts: service_opts,
-      secret: Keyword.get(opts, :secret),
-      content_type_fallback: Keyword.get(opts, :content_type_fallback, "application/octet-stream")
-    }
+      secret: Keyword.get(opts, :secret)
+    })
   end
 
-  # sobelow_skip ["XSS.ContentType", "XSS.SendResp"]
   @impl true
   def call(conn, opts) do
+    conn = ResponseMetadata.put_nosniff(conn)
+
+    if ResponseMetadata.allowed_method?(conn),
+      do: serve(conn, opts),
+      else: ResponseMetadata.method_not_allowed(conn)
+  end
+
+  # sobelow_skip ["XSS.SendResp"]
+  defp serve(conn, opts) do
     key = conn.path_info |> Enum.join("/")
 
     if key == "" do
@@ -55,11 +81,11 @@ defmodule AshStorage.Plug.Proxy do
 
           case opts.service_mod.download(key, ctx) do
             {:ok, data} ->
-              content_type = MIME.from_path(key)
+              content_type =
+                ResponseMetadata.content_type(key: key, fallback: opts.content_type_fallback)
 
               conn
-              |> Plug.Conn.put_resp_content_type(content_type)
-              |> maybe_put_disposition(conn)
+              |> ResponseMetadata.put_file_headers(content_type, opts.inline)
               |> Plug.Conn.send_resp(200, data)
               |> Plug.Conn.halt()
 
@@ -95,27 +121,6 @@ defmodule AshStorage.Plug.Proxy do
       end
     else
       _ -> {:error, :forbidden}
-    end
-  end
-
-  defp maybe_put_disposition(conn, _conn_with_params) do
-    params = Plug.Conn.fetch_query_params(conn).query_params
-
-    case params["disposition"] do
-      "attachment" ->
-        filename = params["filename"]
-
-        value =
-          if filename do
-            "attachment; filename=\"#{filename}\""
-          else
-            "attachment"
-          end
-
-        Plug.Conn.put_resp_header(conn, "content-disposition", value)
-
-      _ ->
-        conn
     end
   end
 end

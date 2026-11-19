@@ -11,44 +11,78 @@ defmodule AshStorage.Plug.DiskServe do
       forward "/files", AshStorage.Plug.DiskServe,
         root: "priv/storage"
 
-  With signed URL verification:
+  With signed URL verification, and images allowed to render in the browser:
 
       forward "/files", AshStorage.Plug.DiskServe,
         root: "priv/storage",
-        secret: "a-long-secret-key"
+        secret: "a-long-secret-key",
+        inline: :images
 
   ## Options
 
   - `:root` - (required) the root directory where files are stored
   - `:secret` - secret key for verifying signed URLs. When set, requests
     without a valid signature are rejected with 403.
+  - `:inline` - content types that may render in the browser: `:none` (default),
+    `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
+    Every other type is sent as a download.
+  - `:content_type_fallback` - Content-Type used when the path gives none
+    (default: `"application/octet-stream"`)
+
+  ## Response headers
+
+  Every response carries `X-Content-Type-Options: nosniff`, and only `GET` and
+  `HEAD` are answered (`405` otherwise). A file is sent with
+  `Content-Disposition: attachment` unless its content type is in `:inline`;
+  `?disposition=attachment` forces a download and `?filename=` sets the download
+  name, but a request cannot make a file render inline.
+
+  The content type comes from the segment after the key (`/<key>/<filename>`),
+  else from the key. That segment is chosen by whoever makes the request and is
+  not covered by the signature, so listing an active type such as `text/html` or
+  `image/svg+xml` in `:inline` lets a requester render any file on the mount as
+  that type. See [Serving files](serving.md).
   """
 
   @behaviour Plug
+
+  alias AshStorage.Plug.ResponseMetadata
 
   @impl true
   def init(opts) do
     root = Keyword.fetch!(opts, :root)
 
-    %{
+    Map.merge(ResponseMetadata.init(opts), %{
       root: root,
       secret: Keyword.get(opts, :secret)
-    }
+    })
   end
 
-  # sobelow_skip ["Traversal.SendFile", "Traversal.FileModule", "XSS.ContentType"]
   @impl true
   def call(conn, opts) do
-    with [key | _] = path_info <- conn.path_info,
+    conn = ResponseMetadata.put_nosniff(conn)
+
+    if ResponseMetadata.allowed_method?(conn),
+      do: serve(conn, opts),
+      else: ResponseMetadata.method_not_allowed(conn)
+  end
+
+  # sobelow_skip ["Traversal.SendFile", "Traversal.FileModule"]
+  defp serve(conn, opts) do
+    with [key | segments] <- conn.path_info,
          :ok <- verify_signature(conn, opts) do
       path = Path.join(opts.root, key)
 
       if File.exists?(path) do
-        content_type = path_info |> List.last() |> MIME.from_path()
+        content_type =
+          ResponseMetadata.content_type(
+            filename: List.last(segments),
+            key: key,
+            fallback: opts.content_type_fallback
+          )
 
         conn
-        |> Plug.Conn.put_resp_content_type(content_type)
-        |> maybe_put_disposition(conn)
+        |> ResponseMetadata.put_file_headers(content_type, opts.inline)
         |> Plug.Conn.send_file(200, path)
         |> Plug.Conn.halt()
       else
@@ -79,27 +113,6 @@ defmodule AshStorage.Plug.DiskServe do
       end
     else
       _ -> {:error, :forbidden}
-    end
-  end
-
-  defp maybe_put_disposition(conn, _original_conn) do
-    params = Plug.Conn.fetch_query_params(conn).query_params
-
-    case params["disposition"] do
-      "attachment" ->
-        filename = params["filename"]
-
-        value =
-          if filename do
-            "attachment; filename=\"#{filename}\""
-          else
-            "attachment"
-          end
-
-        Plug.Conn.put_resp_header(conn, "content-disposition", value)
-
-      _ ->
-        conn
     end
   end
 end

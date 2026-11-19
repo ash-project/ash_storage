@@ -75,7 +75,9 @@ defmodule AshStorage.MixProject do
         "documentation/topics/variants.md",
         "documentation/topics/file-arguments.md",
         "documentation/topics/direct-uploads.md",
+        "documentation/topics/serving.md",
         "documentation/topics/checksum-verification.md",
+        "documentation/topics/migrating-to-1.0.md",
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -115,7 +117,8 @@ defmodule AshStorage.MixProject do
         ],
         Plugs: [
           AshStorage.Plug.DiskServe,
-          AshStorage.Plug.Proxy
+          AshStorage.Plug.Proxy,
+          AshStorage.Plug.Redirect
         ],
         Utilities: [
           AshStorage.Token
