@@ -132,6 +132,22 @@ defmodule AshStorage.Plug.ProxyTest do
       end
     end
 
+    test "a mount with :max_lifetime_seconds rejects longer-lived URLs" do
+      upload("file.txt")
+      path = signed_path("file.txt", @secret, expires_in: 3600)
+
+      assert call(path, secret: @secret, max_lifetime_seconds: 600).status == 403
+      assert call(path, secret: @secret, max_lifetime_seconds: 3600).status == 200
+    end
+
+    test "a list of secrets accepts URLs signed with any of them" do
+      upload("file.txt")
+      path = signed_path("file.txt", "old-secret")
+
+      assert call(path, secret: ["new-secret", "old-secret"]).status == 200
+      assert call(path, secret: ["new-secret"]).status == 403
+    end
+
     test "an unsigned mount ignores a token parameter" do
       upload("file.txt")
 
