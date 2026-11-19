@@ -70,15 +70,11 @@ defmodule AshStorage.Transformers.SetupStorage do
           :many -> :has_many
         end
 
-      name_filter = %Ash.Resource.Dsl.Filter{
-        filter: Ash.Expr.expr(name == ^to_string(attachment_def.name))
-      }
-
       opts =
         [
           destination_attribute: destination_attribute,
           validate_destination_attribute?: not is_nil(parent_rel),
-          filters: [name_filter],
+          filters: relationship_filters(dsl_state, attachment_def, parent_rel),
           public?: true
         ]
 
@@ -100,6 +96,26 @@ defmodule AshStorage.Transformers.SetupStorage do
   end
 
   defp add_relationships({:error, error}, _, _), do: {:error, error}
+
+  # A polymorphic attachment resource is shared by every host resource that names
+  # it, so its relationship has to match the host's record type as well as the
+  # attachment name. With `belongs_to_resource` the foreign key already does that.
+  defp relationship_filters(dsl_state, attachment_def, parent_rel) do
+    name_filter = %Ash.Resource.Dsl.Filter{
+      filter: Ash.Expr.expr(name == ^to_string(attachment_def.name))
+    }
+
+    if parent_rel do
+      [name_filter]
+    else
+      record_type = AshStorage.Info.record_type(dsl_state)
+
+      [
+        name_filter,
+        %Ash.Resource.Dsl.Filter{filter: Ash.Expr.expr(record_type == ^record_type)}
+      ]
+    end
+  end
 
   # sobelow_skip ["DOS.BinToAtom"]
   defp add_url_calculations({:ok, dsl_state}, attachments) do

@@ -42,3 +42,41 @@ the URL: Azure SAS URLs do, S3 URLs do not yet. Set `inline:` on the mount for
 the types you want rendered. This only works for keys with a recognisable 
 extension, or through `:content_type_fallback` on a mount that holds one kind 
 of file; generated keys have no extension.
+
+## Polymorphic attachments are matched on `record_type`
+
+This affects attachment resources with no `belongs_to_resource`, where a row
+names its owner with `record_type` and `record_id`.
+
+What changed: the relationship that `has_one_attached` and `has_many_attached`
+generate on a host resource now filters on `record_type` as well as on the
+attachment name. Before, it matched on `record_id` and the name only, so two
+resources that shared an attachment resource could load each other's files when
+their records had equal ids. The `<name>_url`, `<name>_urls` and variant URL
+calculations load through that relationship and change with it.
+
+Who this affects: a row is now loaded only when its `record_type` is the value
+of `AshStorage.Info.record_type/1` for the host resource, which is the module
+name as a string, for example `"Elixir.MyApp.Post"`. Rows stored under another
+value no longer load:
+
+- rows written before the host resource's module was renamed or moved;
+- rows your own code created with a different `record_type`.
+
+Attaching, detaching, purging and the `dependent` option already matched on
+`record_type`, so they were already skipping such rows.
+
+What to do: list the stored values, and rewrite the ones that are not the
+module name of a current host resource. Use your attachment table's name.
+
+```sql
+SELECT record_type, count(*) FROM storage_attachments GROUP BY record_type;
+
+UPDATE storage_attachments
+SET record_type = 'Elixir.MyApp.Blog.Post'
+WHERE record_type = 'Elixir.MyApp.Post';
+```
+
+A record that was given a new file after the rename has a row under each value.
+After the update both rows belong to it again, so for a `has_one_attached`
+remove the one you do not want first.

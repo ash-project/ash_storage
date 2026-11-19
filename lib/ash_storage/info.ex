@@ -28,6 +28,32 @@ defmodule AshStorage.Info do
   end
 
   @doc """
+  The value that identifies a resource in the `record_type` attribute of a
+  polymorphic attachment resource (one with no `belongs_to_resource`).
+
+  The library writes this value when it attaches a file, and matches on it when
+  it loads or looks up attachments. It is the module name as a string, for
+  example `"Elixir.MyApp.Post"`. Call this function instead of building the
+  value yourself, for example when you query the attachment resource directly:
+
+      require Ash.Query
+
+      MyApp.Storage.Attachment
+      |> Ash.Query.filter(record_type == ^AshStorage.Info.record_type(MyApp.Post))
+      |> Ash.read!()
+
+  Accepts a resource module or its DSL state.
+  """
+  @spec record_type(Ash.Resource.t() | Spark.Dsl.t()) :: String.t()
+  def record_type(resource) when is_atom(resource), do: to_string(resource)
+
+  def record_type(dsl_state) when is_map(dsl_state) do
+    dsl_state
+    |> Spark.Dsl.Extension.get_persisted(:module)
+    |> record_type()
+  end
+
+  @doc """
   Get the effective service for an attachment.
 
   Resolution order:
