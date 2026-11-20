@@ -5,6 +5,8 @@ defmodule AshStorage.Changes.Detach do
   require Ash.Query
 
   alias AshStorage.Info
+  alias AshStorage.Pipeline
+  alias AshStorage.Pipeline.Scope
 
   @impl true
   def init(opts), do: {:ok, opts}
@@ -12,17 +14,16 @@ defmodule AshStorage.Changes.Detach do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
 
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
-      resource = record.__struct__
+    Ash.Changeset.after_action(changeset, fn changeset, record ->
+      scope = Scope.from_change(changeset, context)
       blob_id = Ash.Changeset.get_argument(changeset, :blob_id)
       all? = Ash.Changeset.get_argument(changeset, :all) || false
 
-      with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-           {:ok, attachments} <- find_attachments(record, attachment_def, context_opts),
-           {:ok, to_detach} <- select_for_detach(attachments, attachment_def, blob_id, all?) do
-        case destroy_attachment_records(to_detach, context_opts) do
+      with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
+           {:ok, attachments} <- find_attachments(record, target.attachment, scope),
+           {:ok, to_detach} <- select_for_detach(attachments, target.attachment, blob_id, all?) do
+        case destroy_attachment_records(to_detach, scope) do
           {:ok, destroyed} ->
             {:ok, Ash.Resource.put_metadata(record, :detached_attachments, destroyed)}
 
@@ -46,7 +47,7 @@ defmodule AshStorage.Changes.Detach do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, context_opts) do
+  defp find_attachments(record, attachment_def, scope) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -73,11 +74,11 @@ defmodule AshStorage.Changes.Detach do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    |> Ash.read(Scope.to_opts(scope))
   end
 
-  defp destroy_attachment_records(attachments, context_opts) do
-    destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+  defp destroy_attachment_records(attachments, scope) do
+    destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
 
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       case Ash.destroy(att, destroy_opts) do

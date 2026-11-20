@@ -8,11 +8,12 @@ defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
   """
   use Ash.Resource.Change
 
+  alias AshStorage.Pipeline.Scope
+
   @impl true
   def change(changeset, _opts, context) do
-    context_opts = Ash.Context.to_opts(context)
-
-    Ash.Changeset.after_action(changeset, fn _changeset, blob ->
+    Ash.Changeset.after_action(changeset, fn changeset, blob ->
+      scope = Scope.from_change(changeset, context)
       pending_variants = blob.metadata["__pending_variants__"] || %{}
 
       pending =
@@ -27,7 +28,7 @@ defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
         resource_module = String.to_existing_atom(info["resource"])
         attachment_name = String.to_existing_atom(info["attachment"])
 
-        {:ok, attachment_def} = AshStorage.Info.attachment(resource_module, attachment_name)
+        {:ok, target} = AshStorage.Pipeline.resolve(resource_module, attachment_name)
 
         variant_def = %AshStorage.VariantDefinition{
           name: String.to_existing_atom(variant_name),
@@ -36,12 +37,7 @@ defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
         }
 
         new_status =
-          case AshStorage.VariantGenerator.generate(
-                 blob,
-                 variant_def,
-                 resource_module,
-                 attachment_def
-               ) do
+          case AshStorage.VariantGenerator.generate(blob, variant_def, target, scope) do
             {:ok, _variant_blob} -> "complete"
             {:error, :not_accepted} -> "skipped"
             {:error, error} -> {:halt_error, error}
@@ -70,7 +66,7 @@ defmodule AshStorage.BlobResource.Changes.RunPendingVariants do
             case Ash.update(
                    blob,
                    update_params,
-                   Keyword.merge(context_opts, action: :update_metadata)
+                   Scope.to_opts(scope, action: :update_metadata)
                  ) do
               {:ok, blob} -> {:cont, {:ok, blob}}
               {:error, error} -> {:halt, {:error, error}}

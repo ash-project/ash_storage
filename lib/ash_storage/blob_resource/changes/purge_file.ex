@@ -2,9 +2,9 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
   @moduledoc """
   A change that deletes the file from storage when a blob is destroyed.
 
-  This is used by the `:purge_blob` action on blob resources. It loads
-  the `parsed_service_opts` calculation to reconstitute the service options
-  from the stored map, then deletes the file once the record has been destroyed.
+  This is used by the `:purge_blob` action on blob resources. It reconstitutes
+  the service options from the map stored on the blob, then deletes the file
+  once the record has been destroyed.
 
   The file is deleted inside the action's transaction, so if the record can't
   be destroyed the file is kept, and if the file can't be deleted the destroy
@@ -13,13 +13,15 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
   """
   use Ash.Resource.Change
 
+  alias AshStorage.Pipeline.{Scope, Target}
+
   @impl true
-  def change(changeset, _opts, _context) do
+  def change(changeset, _opts, context) do
     changeset
     |> Ash.Changeset.before_action(fn changeset ->
-      # Loaded before the record is destroyed, while it can still be read
-      blob = changeset.data |> Ash.load!(:parsed_service_opts)
-      ctx = AshStorage.Service.Context.new(blob.parsed_service_opts || [])
+      # Built before the record is destroyed, while it can still be read
+      blob = changeset.data
+      ctx = Target.blob_context(blob, Scope.from_change(changeset, context))
 
       Ash.Changeset.put_context(changeset, :__ash_storage_purge__, {blob.service_name, ctx})
     end)

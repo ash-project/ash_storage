@@ -239,4 +239,22 @@ defmodule AshStorage.MultitenancyTest do
       assert post.cached_line_count == 3
     end
   end
+
+  describe "on-demand variant URL with tenant" do
+    test "generates the variant in the tenant and returns its URL" do
+      tenant = Ash.UUID.generate()
+      post = Ash.create!(AshStorage.Test.TenantMatrixPost, %{}, tenant: tenant)
+
+      {:ok, _} =
+        Operations.attach(post, :lazy, "hello",
+          filename: "hello.txt",
+          content_type: "text/plain",
+          tenant: tenant
+        )
+
+      post = Ash.load!(post, :lazy_upper_url, tenant: tenant)
+
+      assert "http://test.local/storage/" <> _ = post.lazy_upper_url
+    end
+  end
 end

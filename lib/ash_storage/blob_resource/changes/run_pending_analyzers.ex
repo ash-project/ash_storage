@@ -8,9 +8,12 @@ defmodule AshStorage.BlobResource.Changes.RunPendingAnalyzers do
   """
   use Ash.Resource.Change
 
+  alias AshStorage.Pipeline.Scope
+
   @impl true
-  def change(changeset, _opts, _context) do
+  def change(changeset, _opts, context) do
     Ash.Changeset.after_action(changeset, fn changeset, blob ->
+      opts = changeset |> Scope.from_change(context) |> Scope.to_opts()
       analyzers = blob.analyzers || %{}
 
       pending =
@@ -22,7 +25,7 @@ defmodule AshStorage.BlobResource.Changes.RunPendingAnalyzers do
         # sobelow_skip ["DOS.BinToAtom"]
         module = String.to_existing_atom(analyzer_mod)
 
-        case AshStorage.Operations.run_analyzer(blob, module, tenant: changeset.tenant) do
+        case AshStorage.Operations.run_analyzer(blob, module, opts) do
           {:ok, blob} -> {:cont, {:ok, blob}}
           {:error, error} -> {:halt, {:error, error}}
         end

@@ -15,19 +15,10 @@ defmodule AshStorage.Calculations.VariantUrl do
     attachment_name = opts[:attachment_name]
     variant_name = opts[:variant_name]
     resource = opts[:resource]
-    {:ok, attachment_def} = AshStorage.Info.attachment(resource, attachment_name)
-    variant_def = Enum.find(attachment_def.variants, &(&1.name == variant_name))
-
-    {:ok, {service_mod, service_opts}} =
-      AshStorage.Info.service_for_attachment(resource, attachment_def)
-
-    ctx =
-      AshStorage.Service.Context.new(service_opts,
-        resource: resource,
-        attachment: attachment_def,
-        actor: Map.get(context, :actor),
-        tenant: Map.get(context, :tenant)
-      )
+    {:ok, target} = AshStorage.Pipeline.resolve(resource, attachment_name)
+    variant_def = Enum.find(target.attachment.variants, &(&1.name == variant_name))
+    scope = AshStorage.Pipeline.Scope.from_calculation(context)
+    {:ok, {service_mod, ctx}} = AshStorage.Pipeline.Target.service_context(target, scope)
 
     {:ok,
      Enum.map(records, fn record ->
@@ -40,7 +31,7 @@ defmodule AshStorage.Calculations.VariantUrl do
 
            variant_blob =
              find_variant_blob(source_blob, variant_def) ||
-               generate_variant(source_blob, variant_def, resource, attachment_def)
+               generate_variant(source_blob, variant_def, target, scope)
 
            if variant_blob do
              url_ctx =
@@ -63,8 +54,8 @@ defmodule AshStorage.Calculations.VariantUrl do
     end)
   end
 
-  defp generate_variant(source_blob, variant_def, resource, attachment_def) do
-    case AshStorage.VariantGenerator.generate(source_blob, variant_def, resource, attachment_def) do
+  defp generate_variant(source_blob, variant_def, target, scope) do
+    case AshStorage.VariantGenerator.generate(source_blob, variant_def, target, scope) do
       {:ok, variant_blob} -> variant_blob
       {:error, _} -> nil
     end

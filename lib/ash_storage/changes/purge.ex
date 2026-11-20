@@ -5,7 +5,8 @@ defmodule AshStorage.Changes.Purge do
   require Ash.Query
 
   alias AshStorage.Info
-  alias AshStorage.Service.Context
+  alias AshStorage.Pipeline
+  alias AshStorage.Pipeline.{Scope, Target}
 
   @impl true
   def init(opts), do: {:ok, opts}
@@ -13,20 +14,17 @@ defmodule AshStorage.Changes.Purge do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
-    context_opts = Ash.Context.to_opts(context)
 
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
-      resource = record.__struct__
+    Ash.Changeset.after_action(changeset, fn changeset, record ->
+      scope = Scope.from_change(changeset, context)
       blob_id = Ash.Changeset.get_argument(changeset, :blob_id)
       all? = Ash.Changeset.get_argument(changeset, :all) || false
 
-      with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-           {:ok, attachments} <- find_attachments(record, attachment_def, context_opts),
-           {:ok, to_purge} <- select_for_purge(attachments, attachment_def, blob_id, all?),
-           {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
-        ctx = build_context(service_opts, resource, attachment_def, changeset)
-
-        case purge_attachments(to_purge, service_mod, ctx, context_opts) do
+      with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
+           {:ok, attachments} <- find_attachments(record, target.attachment, scope),
+           {:ok, to_purge} <- select_for_purge(attachments, target.attachment, blob_id, all?),
+           {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
+        case purge_attachments(to_purge, service_mod, ctx, scope) do
           {:ok, purged} ->
             {:ok, Ash.Resource.put_metadata(record, :purged_attachments, purged)}
 
@@ -49,24 +47,8 @@ defmodule AshStorage.Changes.Purge do
     {:error, :blob_id_required_for_has_many}
   end
 
-  defp resolve_service(resource, attachment_def) do
-    case Info.service_for_attachment(resource, attachment_def) do
-      {:ok, service} -> {:ok, service}
-      :error -> {:error, :no_service_configured}
-    end
-  end
-
-  defp build_context(service_opts, resource, attachment_def, changeset) do
-    Context.new(service_opts,
-      resource: resource,
-      attachment: attachment_def,
-      actor: changeset.context[:private][:actor],
-      tenant: changeset.tenant
-    )
-  end
-
   # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, context_opts) do
+  defp find_attachments(record, attachment_def, scope) do
     resource = record.__struct__
     attachment_resource = Info.storage_attachment_resource!(resource)
     record_id = Map.get(record, :id) |> to_string()
@@ -93,11 +75,11 @@ defmodule AshStorage.Changes.Purge do
     attachment_resource
     |> Ash.Query.filter(^filter)
     |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
+    |> Ash.read(Scope.to_opts(scope))
   end
 
-  defp purge_attachments(attachments, service_mod, ctx, context_opts) do
-    destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
+  defp purge_attachments(attachments, service_mod, ctx, scope) do
+    destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
 
     Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
       blob = att.blob
