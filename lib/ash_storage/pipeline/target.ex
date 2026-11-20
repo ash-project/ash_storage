@@ -7,14 +7,15 @@ defmodule AshStorage.Pipeline.Target do
   alias AshStorage.Pipeline.Scope
   alias AshStorage.Service.Context
 
-  defstruct [:resource, :attachment, :service, :blob_resource, :attachment_resource]
+  defstruct [:resource, :attachment, :service, :blob_resource, :attachment_resource, :owner]
 
   @type t :: %__MODULE__{
           resource: Ash.Resource.t(),
           attachment: AshStorage.AttachmentDefinition.t(),
           service: {module(), keyword()} | nil,
           blob_resource: Ash.Resource.t(),
-          attachment_resource: Ash.Resource.t()
+          attachment_resource: Ash.Resource.t(),
+          owner: AshStorage.Pipeline.Owner.t()
         }
 
   @doc "The configured service and a context for it, for uploads under this attachment."

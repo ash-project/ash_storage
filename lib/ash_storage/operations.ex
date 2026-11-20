@@ -13,9 +13,6 @@ defmodule AshStorage.Operations do
   - `:purge_<name>` — remove attachment + blob records and delete files
   """
 
-  require Ash.Query
-
-  alias AshStorage.Info
   alias AshStorage.Pipeline
   alias AshStorage.Pipeline.{Scope, Target}
   alias AshStorage.Service.Context
@@ -376,54 +373,6 @@ defmodule AshStorage.Operations do
     end
   end
 
-  # -- Functions used by HandleDependentAttachments --
-
-  @doc false
-  def destroy_attachment_and_blob_records(record, attachment_name, opts \\ []) do
-    scope = Scope.from_opts(opts)
-    destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
-
-    with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
-         {:ok, attachments} <- find_attachments(record, target.attachment, scope),
-         {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
-      Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
-        blob = att.blob
-
-        with {:ok, _} <- Ash.destroy(att, destroy_opts),
-             {:ok, _} <- Ash.destroy(blob, destroy_opts) do
-          {:cont, {:ok, [{service_mod, ctx, blob.key} | keys_acc]}}
-        else
-          {:error, error} -> {:halt, {:error, error}}
-        end
-      end)
-    end
-  end
-
-  @doc false
-  def mark_attachments_for_purge(record, attachment_name, opts \\ []) do
-    scope = Scope.from_opts(opts)
-
-    with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
-         {:ok, attachments} <- find_attachments(record, target.attachment, scope) do
-      Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-        blob = att.blob
-
-        with {:ok, _} <-
-               Ash.destroy(att, Scope.to_opts(scope, action: :destroy, return_destroyed?: true)),
-             {:ok, blob} <-
-               Ash.update(
-                 blob,
-                 %{pending_purge: true},
-                 Scope.to_opts(scope, action: :mark_for_purge, return_record?: true)
-               ) do
-          {:cont, {:ok, [blob | acc]}}
-        else
-          {:error, error} -> {:halt, {:error, error}}
-        end
-      end)
-    end
-  end
-
   # -- Private helpers --
 
   # sobelow_skip ["DOS.BinToAtom"]
@@ -457,36 +406,5 @@ defmodule AshStorage.Operations do
         end
       end
     end
-  end
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, scope) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    filter =
-      if parent_rel do
-        [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-      else
-        [
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id
-        ]
-      end
-
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Scope.to_opts(scope))
   end
 end

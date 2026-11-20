@@ -2,6 +2,7 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
   @moduledoc false
   use Ash.Resource.Change
 
+  alias AshStorage.Pipeline
   alias AshStorage.Pipeline.{Scope, Target}
 
   @impl true
@@ -58,46 +59,17 @@ defmodule AshStorage.Changes.HandleDependentAttachments do
       |> Enum.member?(AshOban)
   end
 
-  # sobelow_skip ["DOS.BinToAtom"]
   defp prefetch_attachments(record, scope) do
     resource = record.__struct__
     attachment_defs = AshStorage.Info.attachments(resource)
 
     Enum.reduce(attachment_defs, %{}, fn attachment_def, acc ->
-      case attachment_def.dependent do
-        dep when dep in [:purge, :detach] ->
-          attachment_resource = AshStorage.Info.storage_attachment_resource!(resource)
-          record_id = Map.get(record, :id) |> to_string()
-
-          belongs_to_resources =
-            Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-          parent_rel =
-            Enum.find(belongs_to_resources, fn bt ->
-              bt.resource == resource
-            end)
-
-          filter =
-            if parent_rel do
-              [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-            else
-              [
-                name: to_string(attachment_def.name),
-                record_type: to_string(resource),
-                record_id: record_id
-              ]
-            end
-
-          case attachment_resource
-               |> Ash.Query.filter(^filter)
-               |> Ash.Query.load(:blob)
-               |> Ash.read(Scope.to_opts(scope)) do
-            {:ok, attachments} -> Map.put(acc, attachment_def.name, attachments)
-            _ -> acc
-          end
-
-        _ ->
-          acc
+      with dep when dep in [:purge, :detach] <- attachment_def.dependent,
+           {:ok, target} <- Pipeline.resolve(resource, attachment_def.name),
+           {:ok, attachments} <- Pipeline.attachments(record, target, scope) do
+        Map.put(acc, attachment_def.name, attachments)
+      else
+        _ -> acc
       end
     end)
   end

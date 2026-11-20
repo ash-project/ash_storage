@@ -44,25 +44,6 @@ defmodule AshStorage.ObanIntegrationTest do
     end
   end
 
-  describe "mark_for_purge" do
-    test "marks blob as pending_purge without deleting file" do
-      post = create_post!()
-
-      {:ok, %{blob: blob}} =
-        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
-
-      assert AshStorage.Service.Test.exists?(blob.key)
-      refute blob.pending_purge
-
-      {:ok, [marked_blob]} =
-        AshStorage.Operations.mark_attachments_for_purge(post, :cover_image)
-
-      assert marked_blob.pending_purge
-      # File still exists - not deleted yet
-      assert AshStorage.Service.Test.exists?(blob.key)
-    end
-  end
-
   describe "purge_blob action" do
     test "deletes file from storage and destroys blob record" do
       post = create_post!()

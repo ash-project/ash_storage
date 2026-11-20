@@ -2,11 +2,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
   @moduledoc false
   use Ash.Resource.Change
 
-  require Ash.Query
-
-  alias AshStorage.Info
   alias AshStorage.Pipeline
-  alias AshStorage.Pipeline.{Scope, Target}
+  alias AshStorage.Pipeline.{Owner, Scope, Target}
   alias AshStorage.Service.Context
 
   @impl true
@@ -46,10 +43,10 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
             # On update, replace existing attachment; on create, skip
             with {:ok, _} <- maybe_replace_on_update(changeset, record, target, scope),
-                 {:ok, attachment} <- create_attachment(record, target.attachment, blob, scope) do
+                 {:ok, attachment} <- Pipeline.insert_attachment(record, blob, target, scope) do
               # Now that we have the record ID, update write_target for oban analyzers
               if state[:has_oban_analyzers?] do
-                update_oban_write_targets(blob, record, scope)
+                update_oban_write_targets(blob, record, target, scope)
                 AshOban.run_trigger(blob, :run_pending_analyzers, tenant: scope.tenant)
               end
 
@@ -89,7 +86,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
              content_type: content_type
            ),
          {:ok, blob, attrs_to_write} <-
-           run_analyzers(blob, target.attachment, changeset.data, file, scope) do
+           run_analyzers(blob, target, changeset.data, file, scope) do
       {:ok, attrs_to_write,
        %{
          blob: blob,
@@ -100,7 +97,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   end
 
   # After create, we have the real record ID — update write_target in blob's analyzers map
-  defp update_oban_write_targets(blob, record, scope) do
+  defp update_oban_write_targets(blob, record, target, scope) do
     analyzers = blob.analyzers || %{}
 
     has_write_targets? =
@@ -115,11 +112,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                Map.put(
                  entry,
                  "write_target",
-                 %{
-                   "resource" => to_string(record.__struct__),
-                   "id" => to_string(Map.get(record, :id))
-                 }
-                 |> maybe_put_tenant(scope.tenant)
+                 target |> Owner.write_target(record) |> maybe_put_tenant(scope.tenant)
                )}
 
             _ ->
@@ -171,8 +164,8 @@ defmodule AshStorage.Changes.HandleFileArgument do
     Enum.any?(attachment_def.analyzers || [], fn defn -> defn.analyze == :oban end)
   end
 
-  defp run_analyzers(blob, attachment_def, record, io, scope) do
-    analyzer_defs = attachment_def.analyzers || []
+  defp run_analyzers(blob, target, record, io, scope) do
+    analyzer_defs = target.attachment.analyzers || []
 
     if analyzer_defs == [] do
       {:ok, blob, %{}}
@@ -197,11 +190,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
               |> Map.put("write_attributes", string_wa)
               |> Map.put(
                 "write_target",
-                %{
-                  "resource" => to_string(record.__struct__),
-                  "id" => to_string(Map.get(record, :id))
-                }
-                |> maybe_put_tenant(scope.tenant)
+                target |> Owner.write_target(record) |> maybe_put_tenant(scope.tenant)
               )
             else
               entry
@@ -378,7 +367,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
   defp maybe_replace_existing(record, %Target{attachment: %{type: :one}} = target, scope) do
     with {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
-      case find_attachments(record, target.attachment, scope) do
+      case Pipeline.attachments(record, target, scope) do
         {:ok, []} -> {:ok, :noop}
         {:ok, existing} -> purge_attachments(existing, service_mod, ctx, scope)
         {:error, _} = error -> error
@@ -388,66 +377,6 @@ defmodule AshStorage.Changes.HandleFileArgument do
 
   defp maybe_replace_existing(_record, %Target{attachment: %{type: :many}}, _scope),
     do: {:ok, :noop}
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp create_attachment(record, attachment_def, blob, scope) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel = Enum.find(belongs_to_resources, fn bt -> bt.resource == resource end)
-
-    params =
-      if parent_rel do
-        fk_attr = :"#{parent_rel.name}_id"
-
-        Map.new([
-          {:name, to_string(attachment_def.name)},
-          {fk_attr, record_id},
-          {:blob_id, blob.id}
-        ])
-      else
-        %{
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id,
-          blob_id: blob.id
-        }
-      end
-
-    Ash.create(attachment_resource, params, Scope.to_opts(scope, action: :create))
-  end
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, scope) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel = Enum.find(belongs_to_resources, fn bt -> bt.resource == resource end)
-
-    filter =
-      if parent_rel do
-        [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-      else
-        [
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id
-        ]
-      end
-
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Scope.to_opts(scope))
-  end
 
   defp purge_attachments(attachments, service_mod, ctx, scope) do
     destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)

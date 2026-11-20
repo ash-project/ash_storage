@@ -25,9 +25,6 @@ defmodule AshStorage.Changes.AttachBlob do
   """
   use Ash.Resource.Change
 
-  require Ash.Query
-
-  alias AshStorage.Info
   alias AshStorage.Pipeline
   alias AshStorage.Pipeline.{Scope, Target}
 
@@ -60,9 +57,9 @@ defmodule AshStorage.Changes.AttachBlob do
         with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
              {:ok, {service_mod, ctx}} <- Target.service_context(target, scope),
              {:ok, blob} <- fetch_blob(target, blob_id, scope),
-             {:ok, existing} <- find_attachments(record, target.attachment, blob, scope),
+             {:ok, existing} <- existing_attachments(record, target, blob, scope),
              {:ok, blob, attachment} <-
-               attach(record, target.attachment, blob, existing, service_mod, ctx, scope) do
+               attach(record, target, blob, existing, service_mod, ctx, scope) do
           record =
             record
             |> Ash.Resource.put_metadata(:"#{attachment_name}_blob", blob)
@@ -125,7 +122,15 @@ defmodule AshStorage.Changes.AttachBlob do
 
   # Attaching the blob that is already attached is a no-op, so that e.g. a form
   # sending back the current blob id doesn't purge the file it points to.
-  defp attach(record, attachment_def, blob, existing, service_mod, ctx, scope) do
+  defp attach(
+         record,
+         %Target{attachment: attachment_def} = target,
+         blob,
+         existing,
+         service_mod,
+         ctx,
+         scope
+       ) do
     case Enum.split_with(existing, &(&1.blob_id == blob.id)) do
       {[attachment | _], others} ->
         with {:ok, _} <-
@@ -137,7 +142,7 @@ defmodule AshStorage.Changes.AttachBlob do
         with {:ok, blob} <- verify_blob(blob, service_mod, ctx, scope),
              {:ok, _} <-
                maybe_replace_existing(others, attachment_def, service_mod, ctx, scope),
-             {:ok, attachment} <- create_attachment(record, attachment_def, blob, scope) do
+             {:ok, attachment} <- Pipeline.insert_attachment(record, blob, target, scope) do
           {:ok, blob, attachment}
         end
     end
@@ -152,78 +157,12 @@ defmodule AshStorage.Changes.AttachBlob do
   defp maybe_replace_existing(_existing, %{type: :many}, _service_mod, _ctx, _scope),
     do: {:ok, :noop}
 
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp create_attachment(record, attachment_def, blob, scope) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
+  # has_many appends, so only an existing attachment of this blob matters
+  defp existing_attachments(record, %Target{attachment: %{type: :one}} = target, _blob, scope),
+    do: Pipeline.attachments(record, target, scope)
 
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    params =
-      if parent_rel do
-        fk_attr = :"#{parent_rel.name}_id"
-
-        Map.new([
-          {:name, to_string(attachment_def.name)},
-          {fk_attr, record_id},
-          {:blob_id, blob.id}
-        ])
-      else
-        %{
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id,
-          blob_id: blob.id
-        }
-      end
-
-    Ash.create(attachment_resource, params, Scope.to_opts(scope, action: :create))
-  end
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, blob, scope) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    filter =
-      if parent_rel do
-        [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-      else
-        [
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id
-        ]
-      end
-
-    # has_many appends, so only an existing attachment of this blob matters
-    filter =
-      case attachment_def.type do
-        :one -> filter
-        :many -> [{:blob_id, blob.id} | filter]
-      end
-
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Scope.to_opts(scope))
-  end
+  defp existing_attachments(record, %Target{attachment: %{type: :many}} = target, blob, scope),
+    do: Pipeline.attachments(record, target, scope, blob_id: blob.id)
 
   defp purge_attachments(attachments, service_mod, ctx, scope) do
     destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
