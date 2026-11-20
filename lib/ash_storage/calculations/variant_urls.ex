@@ -44,7 +44,13 @@ defmodule AshStorage.Calculations.VariantUrls do
                  generate_variant(source_blob, variant_def, resource, attachment_def)
 
              if variant_blob do
-               service_mod.url(variant_blob.key, ctx)
+               url_ctx =
+                 AshStorage.Service.Context.put_blob_metadata(ctx,
+                   content_type: variant_blob.content_type,
+                   filename: variant_blob.filename
+                 )
+
+               service_mod.url(variant_blob.key, url_ctx)
              end
            end)
 

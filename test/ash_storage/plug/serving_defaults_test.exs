@@ -49,7 +49,7 @@ defmodule AshStorage.Plug.ServingDefaultsTest do
     assert conn.status == 200
     assert conn.resp_body == @script
     assert header(conn, "content-type") =~ "text/html"
-    assert header(conn, "content-disposition") == "attachment"
+    assert header(conn, "content-disposition") == ~s(attachment; filename="evil.html")
     assert header(conn, "x-content-type-options") == "nosniff"
   end
 
@@ -58,6 +58,6 @@ defmodule AshStorage.Plug.ServingDefaultsTest do
 
     assert conn.status == 200
     assert header(conn, "content-type") =~ "image/svg+xml"
-    assert header(conn, "content-disposition") == "attachment"
+    assert header(conn, "content-disposition") == ~s(attachment; filename="evil.svg")
   end
 end

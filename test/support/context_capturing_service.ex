@@ -4,7 +4,8 @@ defmodule AshStorage.Test.ContextCapturingService do
 
   @doc """
   A test service wrapper that records the `Context` it was called with on
-  each `upload/3`, keyed by `key`, in the calling process's dictionary.
+  each `upload/3` and `url/2`, keyed by `key`, in the calling process's
+  dictionary.
   Delegates everything to `AshStorage.Service.Test`. Used to verify what a
   real service would see for `:content_type` / `:filename`, for upload
   paths (like eager variant generation) that run synchronously in the
@@ -27,7 +28,12 @@ defmodule AshStorage.Test.ContextCapturingService do
   def exists?(key, ctx), do: AshStorage.Service.Test.exists?(key, ctx)
 
   @impl true
-  def url(key, ctx), do: AshStorage.Service.Test.url(key, ctx)
+  def url(key, ctx) do
+    Process.put({__MODULE__, :url, key}, ctx)
+    AshStorage.Service.Test.url(key, ctx)
+  end
 
   def captured_context(key), do: Process.get({__MODULE__, key})
+
+  def captured_url_context(key), do: Process.get({__MODULE__, :url, key})
 end

@@ -191,3 +191,40 @@ service {AshStorage.Service.Disk, root: "priv/storage", base_url: "/files", owne
 
 To tighten the files that are already stored, run `chmod -R go-rwx` on the
 storage root once.
+
+## Disk URLs no longer end with the filename
+
+What changed: the `url/2` function of `AshStorage.Service.Disk` built
+`<base_url>/<key>/<filename>` when it knew the blob's filename. It now builds
+`<base_url>/<key>?filename=<filename>`, and `AshStorage.Plug.DiskServe` takes
+the whole request path below the mount as the key, so keys that contain `/`,
+such as keys with a tenant prefix or from a `path` function, can be served. A
+URL of the old shape gets `404`. The URL calculations now pass the blob's
+filename and content type as the context's `:filename` and `:content_type`, and
+no longer set the undocumented `:original_filename` service option, which the
+Disk service no longer reads. The plug also resolves keys with the Disk service's
+rules, so a symbolic link under the root that leads outside it, or that has an
+absolute target, is no longer served and gets `404`.
+
+Who this affects: applications that serve files with `AshStorage.Plug.DiskServe`
+and stored Disk URLs somewhere (rendered pages, emails, a cache); code that
+passed `:original_filename` to `Disk.url/2`; custom services that read
+`service_opts[:original_filename]` in `url/2`; and storage roots that contain
+symbolic links.
+
+What to do: generate stored URLs again from the URL calculations or
+`Disk.url/2` instead of keeping them. Pass the filename on the context instead
+of `:original_filename`:
+
+```elixir
+ctx = AshStorage.Service.Context.new(service_opts, filename: blob.filename)
+AshStorage.Service.Disk.url(blob.key, ctx)
+```
+
+In a custom service, read `ctx.filename` in `url/2` instead of
+`service_opts[:original_filename]`; `ctx.content_type` holds the blob's
+content type.
+
+Replace a symbolic link that leads outside the root, or that has an absolute
+target, with a relative link that stays inside the root, or with a copy of the
+file. See [Keys in requests](storage-keys.md#keys-in-requests).

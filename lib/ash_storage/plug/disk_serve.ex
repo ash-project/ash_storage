@@ -37,20 +37,31 @@ defmodule AshStorage.Plug.DiskServe do
   `?disposition=attachment` forces a download and `?filename=` sets the download
   name, but a request cannot make a file render inline.
 
-  The key is the first segment of the request path. A key that is empty,
-  contains a control character, starts with `/` or `\\`, is `..`, or names a
-  directory gets `404`. See [Storage keys](storage-keys.md).
+  ## Keys
 
-  The content type comes from the segment after the key (`/<key>/<filename>`),
-  else from the key. That segment is chosen by whoever makes the request and is
-  not covered by the signature, so listing an active type such as `text/html` or
-  `image/svg+xml` in `:inline` lets a requester render any file on the mount as
-  that type. See [Serving files](serving.md).
+  The whole request path below the mount is the storage key, so
+  `/files/tenant-1/abc123` serves the key `tenant-1/abc123`. A key that is
+  empty, contains a control character, starts with `/` or `\\`, or has a `..`
+  segment gets `404` before the signature is checked. The file is then resolved
+  by `AshStorage.Service.Disk` with the rules it uses for every other
+  operation: a key that names a directory, a path below a file, or a symbolic
+  link that leads outside `:root` or has an absolute target gets `404`. See
+  [Storage keys](storage-keys.md).
+
+  ## Content type
+
+  The content type comes from the extension of `?filename=`, else from the
+  key. The `filename` parameter is chosen by whoever makes the request and is
+  not covered by the signature, so listing an active type such as `text/html`
+  or `image/svg+xml` in `:inline` lets a requester render any file on the
+  mount as that type. See [Serving files](serving.md).
   """
 
   @behaviour Plug
 
   alias AshStorage.Plug.ResponseMetadata
+  alias AshStorage.Service.Context
+  alias AshStorage.Service.Disk
 
   @impl true
   def init(opts) do
@@ -71,50 +82,44 @@ defmodule AshStorage.Plug.DiskServe do
       else: ResponseMetadata.method_not_allowed(conn)
   end
 
-  # sobelow_skip ["Traversal.SendFile", "Traversal.FileModule"]
+  # sobelow_skip ["Traversal.SendFile"]
   defp serve(conn, opts) do
-    with [key | segments] <- conn.path_info,
-         :ok <- AshStorage.Key.validate_lookup(key),
-         :ok <- verify_signature(conn, opts) do
-      path = Path.join(opts.root, key)
+    key = Enum.join(conn.path_info, "/")
 
-      if File.regular?(path) do
-        content_type =
-          ResponseMetadata.content_type(
-            filename: List.last(segments),
-            key: key,
-            fallback: opts.content_type_fallback
-          )
+    with :ok <- AshStorage.Key.validate_lookup(key),
+         :ok <- verify_signature(conn, key, opts),
+         {:ok, path} <- Disk.file_path(key, Context.new(root: opts.root)) do
+      content_type =
+        ResponseMetadata.content_type(
+          filename: ResponseMetadata.request_overrides(conn).filename,
+          key: key,
+          fallback: opts.content_type_fallback
+        )
 
-        conn
-        |> ResponseMetadata.put_file_headers(content_type, opts.inline)
-        |> Plug.Conn.send_file(200, path)
-        |> Plug.Conn.halt()
-      else
-        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-      end
+      conn
+      |> ResponseMetadata.put_file_headers(content_type, opts.inline)
+      |> Plug.Conn.send_file(200, path)
+      |> Plug.Conn.halt()
     else
-      [] ->
-        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-
-      {:error, {:invalid_storage_key, _, _}} ->
-        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
-
       {:error, :forbidden} ->
         conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
+
+      # A refused key, a missing file, a directory, a link that leaves the root
+      # and any other file-system error look the same to the requester.
+      {:error, _reason} ->
+        conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
     end
   end
 
-  defp verify_signature(_conn, %{secret: nil}), do: :ok
+  defp verify_signature(_conn, _key, %{secret: nil}), do: :ok
 
-  defp verify_signature(conn, %{secret: secret}) do
+  defp verify_signature(conn, key, %{secret: secret}) do
     params = Plug.Conn.fetch_query_params(conn).query_params
 
     with token when is_binary(token) <- params["token"],
          expires when is_binary(expires) <- params["expires"],
          {expires_at, ""} <- Integer.parse(expires),
          true <- expires_at > System.system_time(:second) do
-      key = hd(conn.path_info)
       expected = AshStorage.Token.sign(secret, key, expires_at)
 
       if Plug.Crypto.secure_compare(token, expected) do

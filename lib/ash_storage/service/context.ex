@@ -25,10 +25,12 @@ defmodule AshStorage.Service.Context do
     underlying object — e.g. the S3 service forwards it as the
     `Content-Type` header on PUT. `nil` means the caller didn't supply one
     and the service should fall back to whatever default it normally uses.
+    For `url/2` it is the recorded content type of the blob the URL is for.
   - `:filename` - original filename of the bytes being uploaded. Reserved
     for services that record it as object metadata (e.g. an S3
     `Content-Disposition` header, an Azure `x-ms-meta-filename` header).
-    Not currently consumed by any bundled service. `nil` when unknown.
+    For `url/2` it is the filename of the blob the URL is for;
+    `AshStorage.Service.Disk` adds it to the URL. `nil` when unknown.
 
   ## Lifecycle
 
