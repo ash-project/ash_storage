@@ -112,6 +112,12 @@ post.cover_image.blob.variants
 #=> [%MyApp.StorageBlob{variant_name: "thumbnail", ...}]
 ```
 
+## Purging
+
+Variants go with their source. Purging an attachment, a `dependent: :purge` destroy and
+the `:purge_blob` action all remove the source blob's variant rows before its own row,
+and delete the variants' files with the source's.
+
 ## Cache invalidation via digest
 
 Each variant definition produces a digest from its module and opts. If you change the opts (e.g. resize from 200x200 to 300x300), the digest changes. On-demand variants with stale digests are regenerated automatically — the URL calculation looks for a matching `variant_digest` and generates a new one if not found.

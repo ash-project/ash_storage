@@ -28,6 +28,37 @@ defmodule AshStorage.DependentTest do
       refute AshStorage.Service.Test.exists?(blob.key)
     end
 
+    test "destroying record removes the blob's variants and their files" do
+      post =
+        AshStorage.Test.VariantPost
+        |> Ash.Changeset.for_create(:create, %{title: "variants"})
+        |> Ash.create!()
+
+      {:ok, _} =
+        Operations.attach(post, :document, "hello", filename: "a.txt", content_type: "text/plain")
+
+      Ash.destroy!(post)
+
+      assert AshStorage.Service.Test.list_keys() == []
+    end
+
+    test "destroying record keeps a blob another record uses" do
+      post = create_post!()
+      other = create_post!("other")
+
+      {:ok, %{blob: blob}} =
+        Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
+
+      other
+      |> Ash.Changeset.for_update(:attach_blob, %{cover_image_blob_id: blob.id})
+      |> Ash.update!()
+
+      Ash.destroy!(post)
+
+      assert {:ok, _} = Ash.get(AshStorage.Test.Blob, blob.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+    end
+
     test "destroying record with no attachments succeeds" do
       post = create_post!()
       Ash.destroy!(post)

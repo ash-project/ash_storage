@@ -46,11 +46,7 @@ defmodule AshStorage.AttachMatrixTest do
     {:direct_upload, :replace_keeps_shared_blob} => "#67",
     {:action, :raw_plug_upload} => "#103",
     {:direct_upload, :refuses_unattachable_blob} => "#67",
-    {:direct_upload, :refuses_foreign_blob} => "#67",
-    {:purge, :removes_variants} => "#88",
-    {:purge, :keeps_shared_blob} => "#67",
-    {:host_destroy, :removes_variants} => "#88",
-    {:host_destroy, :keeps_shared_blob} => "#67"
+    {:direct_upload, :refuses_foreign_blob} => "#67"
   }
 
   @entries [:action, :file_argument, :direct_upload]
@@ -465,7 +461,11 @@ defmodule AshStorage.AttachMatrixTest do
         {:ok, %{blob: blob}} = attach(:action, post, :plain, "stuck")
         Ash.Seed.update!(blob, %{service_name: AshStorage.Test.FailingDeleteService})
 
-        assert {:error, _} = Operations.purge(post, :plain)
+        log = capture_log(fn -> assert {:ok, [_]} = Operations.purge(post, :plain) end)
+
+        assert log =~ blob.key
+        assert attachments(post, :plain) == []
+        assert {:error, _} = Ash.get(Blob, blob.id)
       end)
     end
 

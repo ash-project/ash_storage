@@ -2,39 +2,49 @@ defmodule AshStorage.BlobResource.Changes.PurgeFile do
   @moduledoc """
   A change that deletes the file from storage when a blob is destroyed.
 
-  This is used by the `:purge_blob` action on blob resources. It reconstitutes
-  the service options from the map stored on the blob, then deletes the file
-  once the record has been destroyed.
+  This is used by the `:purge_blob` action on blob resources. Before the blob
+  is destroyed it destroys the blob's variants, whose rows reference it. Once
+  the rows are gone it deletes the variants' files and then the blob's own,
+  each with the service options stored on its row.
 
-  The file is deleted inside the action's transaction, so if the record can't
-  be destroyed the file is kept, and if the file can't be deleted the destroy
-  is rolled back. Services treat deleting a missing file as success, so a purge
-  that fails after the file is gone can be retried.
+  The files are deleted inside the action's transaction, so if a row can't be
+  destroyed every file is kept, and if a file can't be deleted the destroy is
+  rolled back. Services treat deleting a missing file as success, so a purge
+  that fails after some files are gone can be retried.
   """
   use Ash.Resource.Change
 
-  alias AshStorage.Pipeline.{Scope, Target}
+  alias AshStorage.Pipeline.{Purge, Scope, Target}
 
   @impl true
   def change(changeset, _opts, context) do
     changeset
     |> Ash.Changeset.before_action(fn changeset ->
-      # Built before the record is destroyed, while it can still be read
       blob = changeset.data
-      ctx = Target.blob_context(blob, Scope.from_change(changeset, context))
+      scope = Scope.from_change(changeset, context)
 
-      Ash.Changeset.put_context(changeset, :__ash_storage_purge__, {blob.service_name, ctx})
+      case Purge.destroy_variants(blob, scope) do
+        {:ok, deletions} ->
+          deletions =
+            deletions ++ [{blob.service_name, Target.blob_context(blob, scope), blob.key}]
+
+          Ash.Changeset.put_context(changeset, :__ash_storage_purge__, deletions)
+
+        {:error, error} ->
+          Ash.Changeset.add_error(changeset, error)
+      end
     end)
     |> Ash.Changeset.after_action(fn changeset, record ->
-      {service_mod, ctx} = changeset.context.__ash_storage_purge__
+      changeset.context.__ash_storage_purge__
+      |> Enum.reduce_while({:ok, record}, fn {service_mod, ctx, key}, result ->
+        case service_mod.delete(key, ctx) do
+          :ok ->
+            {:cont, result}
 
-      case service_mod.delete(changeset.data.key, ctx) do
-        :ok ->
-          {:ok, record}
-
-        {:error, reason} ->
-          {:error, "Failed to delete file from storage: #{inspect(reason)}"}
-      end
+          {:error, reason} ->
+            {:halt, {:error, "Failed to delete file from storage: #{inspect(reason)}"}}
+        end
+      end)
     end)
   end
 

@@ -33,11 +33,7 @@ defmodule AshStorage.AttachMatrixPgTest do
     {:action, :rollback_keeps_old_file} => "#66",
     {:file_argument, :rollback_keeps_old_file} => "#66",
     {:direct_upload, :rollback_keeps_old_file} => "#66",
-    {:purge, :removes_variants} => "#88",
-    {:purge, :failed_hook_keeps_file} => "#66",
-    {:purge, :rollback_keeps_file} => "#66",
-    {:host_destroy, :removes_variants} => "#88",
-    {:host_destroy, :keeps_shared_blob} => "#67"
+    {:purge, :rollback_keeps_file} => "#66"
   }
 
   @entries [:action, :file_argument, :direct_upload]

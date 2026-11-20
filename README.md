@@ -170,6 +170,9 @@ AshStorage.Operations.purge(post, :documents, blob_id: blob.id)
 AshStorage.Operations.purge(post, :documents, all: true)
 ```
 
+Purging removes the blob's variants along with it. A blob that another attachment row
+still references is kept, with its file, until the last of them is purged.
+
 ### Dependent destroy
 
 Control what happens to attachments when a record is destroyed:
@@ -183,6 +186,7 @@ end
 ```
 
 File deletion happens outside the database transaction, so a failed file delete won't roll back the record destroy.
+Purging also removes the blob's variants, and keeps a blob that another record still references.
 
 Soft destroy actions (where `action.soft?` is true) skip dependent attachment handling entirely.
 
