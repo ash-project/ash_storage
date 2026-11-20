@@ -34,6 +34,16 @@ defmodule AshStorage.Test.PgBlob do
         scheduler_module_name(AshStorage.Test.PgBlob.RunPendingVariantsScheduler)
         worker_module_name(AshStorage.Test.PgBlob.RunPendingVariantsWorker)
       end
+
+      trigger :run_pending_analyzers do
+        action :run_pending_analyzers
+        read_action :read
+        where expr(pending_analyzers == true)
+        scheduler_cron("* * * * *")
+        max_attempts(3)
+        scheduler_module_name(AshStorage.Test.PgBlob.RunPendingAnalyzersScheduler)
+        worker_module_name(AshStorage.Test.PgBlob.RunPendingAnalyzersWorker)
+      end
     end
   end
 
