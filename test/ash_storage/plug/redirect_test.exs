@@ -143,6 +143,22 @@ defmodule AshStorage.Plug.RedirectTest do
       end
     end
 
+    test "rejects missing, altered, expired and foreign tokens without asking for a URL" do
+      service = {CapturingService, test_pid: self()}
+
+      assert call(crafted_path("secret.txt", @secret), secret: @secret).status == 302
+
+      for {description, path} <- rejected_paths("secret.txt", @secret) do
+        conn = call(path, service: service, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{description}"
+        assert conn.resp_body == "Forbidden"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        assert header(conn, "location") == nil
+        refute_received {:url_called, _, _}
+      end
+    end
+
     test "an unsigned mount ignores a token parameter" do
       assert call("/secret.txt?token=garbage").status == 302
     end

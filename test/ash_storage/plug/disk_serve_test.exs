@@ -115,6 +115,19 @@ defmodule AshStorage.Plug.DiskServeTest do
       end
     end
 
+    test "rejects missing, altered, expired and foreign tokens" do
+      assert call(crafted_path("hello.txt", @secret), secret: @secret).status == 200
+
+      for {description, path} <- rejected_paths("hello.txt", @secret) do
+        conn = call(path, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{description}"
+        assert conn.resp_body == "Forbidden"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        refute conn.resp_body =~ "hello world"
+      end
+    end
+
     test "an unsigned mount ignores a token parameter" do
       assert call("/hello.txt?token=garbage").status == 200
     end
