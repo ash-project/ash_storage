@@ -24,16 +24,16 @@ defmodule AshStorage.Plug.ServingDefaultsTest do
     end)
   end
 
-  # Uploads a script under the given filename, claiming it is an image, and
-  # serves it through the URL the resource hands out.
-  defp serve_upload(filename, plug_opts) do
+  # Uploads a script under the given filename, claiming it is an image unless
+  # told otherwise, and serves it through the URL the resource hands out.
+  defp serve_upload(filename, plug_opts, content_type \\ "image/png") do
     post =
       ConfigurablePost
       |> Ash.Changeset.for_create(:create, %{title: "upload"})
       |> Ash.create!()
 
     {:ok, _} =
-      Operations.attach(post, :avatar, @script, filename: filename, content_type: "image/png")
+      Operations.attach(post, :avatar, @script, filename: filename, content_type: content_type)
 
     %{avatar_url: "/files" <> path} = Ash.load!(post, :avatar_url)
 
@@ -59,5 +59,33 @@ defmodule AshStorage.Plug.ServingDefaultsTest do
     assert conn.status == 200
     assert header(conn, "content-type") =~ "image/svg+xml"
     assert header(conn, "content-disposition") == ~s(attachment; filename="evil.svg")
+  end
+
+  describe "with signed URLs" do
+    @secret "serving-defaults-secret-32bytes!!"
+
+    setup do
+      Application.put_env(:ash_storage, ConfigurablePost,
+        storage: [
+          service: {AshStorage.Service.Disk, root: @root, base_url: "/files", secret: @secret}
+        ]
+      )
+    end
+
+    test "the recorded content type lets a file without an extension render inline" do
+      conn = serve_upload("photo", [secret: @secret, inline: :images], "image/png")
+
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "image/png"
+      assert header(conn, "content-disposition") == ~s(inline; filename="photo")
+    end
+
+    test "an uploaded HTML file declared as HTML still downloads" do
+      conn = serve_upload("evil.html", [secret: @secret, inline: :images], "text/html")
+
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "text/html"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="evil.html")
+    end
   end
 end

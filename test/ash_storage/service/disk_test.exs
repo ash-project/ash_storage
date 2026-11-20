@@ -6,6 +6,8 @@ defmodule AshStorage.Service.DiskTest do
 
   @moduletag :tmp_dir
 
+  @secret "test-secret-32bytes!!!!!!!!!!!!!!"
+
   setup %{tmp_dir: tmp_dir} do
     ctx = Context.new(root: tmp_dir, base_url: "http://localhost:4000/storage")
     {:ok, ctx: ctx, root: tmp_dir}
@@ -253,24 +255,81 @@ defmodule AshStorage.Service.DiskTest do
       assert Disk.url("abc123", ctx) == "/storage/abc123"
     end
 
-    test "a signed URL has no filename segment and signs the storage key", %{root: root} do
-      secret = "test-secret-32bytes!!!!!!!!!!!!!!"
-
+    test "a signed URL is <base>/<key>?token= with the key and the blob's metadata", %{
+      root: root
+    } do
       ctx =
-        Context.new([root: root, base_url: "http://localhost:4000/storage", secret: secret],
-          filename: "photo.svg"
+        Context.new([root: root, base_url: "http://localhost:4000/storage", secret: @secret],
+          filename: "photo.svg",
+          content_type: "image/svg+xml"
         )
 
-      url = Disk.url("tenant-1/abc123", ctx)
+      {url, claims} = signed_claims("tenant-1/abc123", ctx)
 
-      %URI{path: path, query: query} = URI.parse(url)
-      assert path == "/storage/tenant-1/abc123"
-      params = URI.decode_query(query)
-      assert params["filename"] == "photo.svg"
-      expires_at = String.to_integer(params["expires"])
-      expected_token = AshStorage.Token.sign(secret, "tenant-1/abc123", expires_at)
-      assert Plug.Crypto.secure_compare(params["token"], expected_token)
+      assert url =~ ~r{\Ahttp://localhost:4000/storage/tenant-1/abc123\?token=v1\.[^&]+\z}
+
+      assert %{"s" => "tenant-1/abc123", "f" => "photo.svg", "t" => "image/svg+xml"} = claims
+      refute Map.has_key?(claims, "d")
+      assert claims["e"] - claims["i"] == 3600
     end
+
+    test "service options win over the context for a signed URL", %{root: root} do
+      ctx =
+        Context.new(
+          [
+            root: root,
+            base_url: "/storage",
+            secret: @secret,
+            filename: "chosen.png",
+            content_type: "image/png",
+            disposition: "attachment",
+            expires_in: 60
+          ],
+          filename: "blob.svg",
+          content_type: "image/svg+xml"
+        )
+
+      {_url, claims} = signed_claims("k", ctx)
+
+      assert %{"f" => "chosen.png", "t" => "image/png", "d" => "attachment"} = claims
+      assert claims["e"] - claims["i"] == 60
+    end
+
+    test "a list secret signs with its first entry", %{root: root} do
+      ctx = Context.new(root: root, base_url: "/storage", secret: [@secret, "old-secret"])
+
+      %URI{query: query} = URI.parse(Disk.url("k", ctx))
+      token = URI.decode_query(query)["token"]
+
+      assert {:ok, _} = AshStorage.Token.verify(token, @secret, purpose: :download)
+      assert {:error, :invalid} = AshStorage.Token.verify(token, "old-secret", purpose: :download)
+    end
+
+    test "an MFA secret is resolved on every call", %{root: root} do
+      ctx = Context.new(root: root, base_url: "/storage", secret: {__MODULE__, :secret, []})
+
+      Process.put(:disk_test_secret, @secret)
+      assert {_url, %{"s" => "k"}} = signed_claims("k", ctx)
+
+      Process.put(:disk_test_secret, "rotated-secret")
+      %URI{query: query} = URI.parse(Disk.url("k", ctx))
+      token = URI.decode_query(query)["token"]
+      assert {:ok, _} = AshStorage.Token.verify(token, "rotated-secret", purpose: :download)
+    end
+  end
+
+  def secret, do: Process.get(:disk_test_secret)
+
+  defp signed_claims(key, ctx) do
+    url = Disk.url(key, ctx)
+    %URI{query: query} = URI.parse(url)
+    params = URI.decode_query(query)
+    assert Map.keys(params) == ["token"]
+
+    {:ok, claims} =
+      AshStorage.Token.verify(params["token"], ctx.service_opts[:secret], purpose: :download)
+
+    {url, claims}
   end
 
   describe "file_path/2" do

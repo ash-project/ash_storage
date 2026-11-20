@@ -9,11 +9,11 @@ response headers they send and how to choose what may render in the browser.
 - `AshStorage.Plug.Proxy` downloads a file from any service and sends it through your application.
 - `AshStorage.Plug.Redirect` redirects to the service's own URL for the file.
 
-They serve by storage key and do not look up the blob, so the blob's recorded 
-`content_type` is not used. Its `filename` is used only where it reaches the 
-plug in the request: `AshStorage.Service.Disk` adds it to its URLs as 
-`?filename=`, which `Plug.DiskServe` uses for the download name and the content 
-type.
+They serve by storage key and do not look up the blob. The blob's recorded 
+`content_type` and `filename` are used only where they reach the plug in the 
+request: `AshStorage.Service.Disk` puts them in the URLs it builds, in the 
+signed token when it has a `:secret` (see [Signed URLs](#signed-urls)) and the 
+filename as `?filename=` otherwise.
 
 ## Keys from the request
 
@@ -65,44 +65,87 @@ forward "/files", AshStorage.Plug.DiskServe, root: "priv/storage", inline: ["ima
 
 ## How the content type is chosen
 
-- `AshStorage.Plug.DiskServe` uses the extension of the `filename` query
-  parameter (`/<key>?filename=<filename>`, as `AshStorage.Service.Disk` builds
-  URLs), then the key's extension.
-- `AshStorage.Plug.Proxy` uses the key's extension.
-- When neither gives a type, the mount's `:content_type_fallback` is used (default `"application/octet-stream"`).
+The plugs use the first of these that gives a type:
 
-Generated keys have no extension, so on a `Plug.Proxy` or `Plug.Redirect` mount 
-`:inline` only takes effect for keys with a recognisable extension, or through 
-`:content_type_fallback` on a mount that holds one kind of file.
+| Mount | Sources, in order |
+|---|---|
+| signed, any plug | the token's content type, the extension of the token's filename, the key's extension |
+| unsigned `Plug.DiskServe` | the extension of `?filename=`, the key's extension |
+| unsigned `Plug.Proxy` or `Plug.Redirect` | the key's extension |
 
-On a `Plug.DiskServe` mount the `filename` parameter is chosen by whoever 
-makes the request and is not covered by the URL signature. With an allowlist 
-that only means choosing between a download and a type you declared safe. But 
-if you list an active type such as `text/html` or `image/svg+xml` in `:inline` 
-on a DiskServe mount, every file on it can be requested as that type.
+When none gives a type, the mount's `:content_type_fallback` is used (default
+`"application/octet-stream"`). A malformed or generic declared type, such as
+`application/octet-stream`, is skipped.
+
+On a signed mount the issuer chooses these values: `AshStorage.Service.Disk`
+signs the blob's recorded content type and filename, so `:inline` also works
+for generated keys, which have no extension. The recorded type is what the
+uploader declared; `nosniff` keeps the browser from reading the file as
+anything else, and the mount's `:inline` list still decides what renders.
+
+On an unsigned mount, generated keys have no extension, so on a `Plug.Proxy` or
+`Plug.Redirect` mount `:inline` only takes effect for keys with a recognisable
+extension, or through `:content_type_fallback` on a mount that holds one kind
+of file.
+
+On an unsigned `Plug.DiskServe` mount the `filename` parameter is chosen by
+whoever makes the request. With an allowlist that only means choosing between a
+download and a type you declared safe. But if you list an active type such as
+`text/html` or `image/svg+xml` in `:inline` on such a mount, every file on it
+can be requested as that type. Sign the URLs of such a mount.
 
 ## Request parameters
 
-- `?disposition=attachment` forces a download. `AshStorage.Token.signed_url/4` adds it for `disposition: "attachment"`, and so does the Disk service when it signs URLs (has a `:secret`). Any other value is ignored.
-- `?filename=` sets the download name. Quotes, backslashes, control characters and path separators are removed, and non-ASCII names are encoded per RFC 6266. On a `Plug.DiskServe` mount its extension also chooses the content type, before the key's; see [How the content type is chosen](#how-the-content-type-is-chosen). The Disk service adds it to every URL for which it knows the blob's filename.
+On an unsigned mount:
 
-Neither parameter is covered by the URL signature: a URL holder can change the 
-name or force a download, but cannot make a response render inline.
+- `?disposition=attachment` forces a download. Any other value is ignored.
+- `?filename=` sets the download name, and on `Plug.DiskServe` its extension
+  chooses the content type (see above). The Disk service adds it to every
+  unsigned URL for which it knows the blob's filename.
+
+A requester can change these, but cannot make a response render inline. On a
+signed mount both parameters are ignored: the token carries the disposition and
+the filename. In both cases quotes, backslashes, control characters and path
+separators are removed from the filename, and non-ASCII names are encoded per
+RFC 6266.
+
+## Signed URLs
+
+A mount with a `:secret` serves only requests with a valid `token` parameter,
+as `AshStorage.Token.signed_url/4` and the Disk service (with the same
+`:secret`) build them:
+
+    /files/covers/3f9a?token=v1.<payload>.<signature>
+
+The token is signed with HMAC-SHA256 and covers the storage key, the expiry
+and, when the issuer sets them, the disposition, the filename and the content
+type. The mount answers `403 Forbidden`, and tells nothing more, when the token
+is missing, malformed, signed with another secret, made for another purpose or
+another key, or expired, or when any part of it was changed. A key that could
+reach outside the store gets `404` before the token is checked.
+
+- The mount and the service that signs its URLs must have the same secret.
+- A token is not bound to a mount: it is valid on every mount that shares the
+  secret. Give mounts with different policies different secrets.
+- The token is a bearer credential in the query string. Anyone who has the URL
+  can use it until it expires, and query strings end up in logs and browser
+  history. Keep `expires_in` short.
 
 ## Redirects
 
 `AshStorage.Plug.Redirect` takes the same `:inline` and 
-`:content_type_fallback` options and decides the same way, from the key's 
-extension. Because the browser then fetches the file from the storage service, 
-the plug can only pass its decision to the service's `url/2`: 
-`disposition: "attachment"` unless the type is allowed (or the request asks for 
-`?disposition=attachment`), and `content_type:` with the allowed type 
-otherwise. `?filename=` is passed on after cleaning.
+`:content_type_fallback` options and decides the same way; see
+[How the content type is chosen](#how-the-content-type-is-chosen). Because the
+browser then fetches the file from the storage service, the plug can only pass
+its decision to the service's `url/2`: `disposition: "attachment"` unless the
+type is allowed (or the token or, on an unsigned mount, the request asks for a
+download), and `content_type:` with the allowed type otherwise. The filename,
+from the token or from `?filename=`, is passed on after cleaning.
 
 Whether the storage origin honours this depends on the service:
 
 - Azure with `presigned: true` puts both into the SAS URL (`rscd` and `rsct`), so it is enforced.
-- A Disk URL leads to `AshStorage.Plug.DiskServe`. When the Disk service signs URLs (has a `:secret`), the `disposition=attachment` travels in the URL and forces a download there, so inline rendering needs `inline:` on both mounts. Without a `:secret` only the cleaned `?filename=` travels: the DiskServe mount uses it for the download name and guesses the content type from its extension, and its own `:inline` policy alone decides whether that type renders inline.
+- A Disk URL leads to `AshStorage.Plug.DiskServe`. When the Disk service signs URLs (has a `:secret`), the disposition, the filename and the allowed content type travel in the token, and a forced download holds there, so inline rendering needs `inline:` on both mounts. Without a `:secret` only the cleaned `?filename=` travels: the DiskServe mount uses it for the download name and guesses the content type from its extension, and its own `:inline` policy alone decides whether that type renders inline.
 - S3 URLs (presigned or public), Azure URLs without presigning, the Test service and `AshStorage.Service.Mirror` do not carry the policy. The object is served with the headers stored on it, so an uploaded HTML or SVG file can render at the storage origin. That origin (the bucket's host, or a CDN domain in front of it) must then not be one your application trusts; otherwise use `AshStorage.Plug.Proxy` instead.
 
 ## Serve user content from a separate origin

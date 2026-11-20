@@ -7,72 +7,6 @@ defmodule AshStorage.TokenTest do
 
   @secret "test-secret-key-32bytes-long!!!!"
 
-  describe "sign/3" do
-    test "produces a consistent signature for the same inputs" do
-      sig1 = Token.sign(@secret, "some/key", 1_000_000)
-      sig2 = Token.sign(@secret, "some/key", 1_000_000)
-      assert sig1 == sig2
-    end
-
-    test "produces different signatures for different keys" do
-      sig1 = Token.sign(@secret, "key-a", 1_000_000)
-      sig2 = Token.sign(@secret, "key-b", 1_000_000)
-      refute sig1 == sig2
-    end
-
-    test "produces different signatures for different expiration times" do
-      sig1 = Token.sign(@secret, "some/key", 1_000_000)
-      sig2 = Token.sign(@secret, "some/key", 2_000_000)
-      refute sig1 == sig2
-    end
-
-    test "produces different signatures for different secrets" do
-      sig1 = Token.sign("secret-a", "some/key", 1_000_000)
-      sig2 = Token.sign("secret-b", "some/key", 1_000_000)
-      refute sig1 == sig2
-    end
-  end
-
-  describe "signed_url/4" do
-    test "includes token and expires in query string" do
-      url = Token.signed_url("/files/abc", @secret, "abc")
-      assert url =~ "/files/abc?"
-      assert url =~ "token="
-      assert url =~ "expires="
-    end
-
-    test "includes disposition when specified" do
-      url = Token.signed_url("/files/abc", @secret, "abc", disposition: "attachment")
-      assert url =~ "disposition=attachment"
-    end
-
-    test "includes filename when specified" do
-      url =
-        Token.signed_url("/files/abc", @secret, "abc",
-          disposition: "attachment",
-          filename: "photo.jpg"
-        )
-
-      assert url =~ "filename=photo.jpg"
-    end
-
-    test "respects expires_in option" do
-      now = System.system_time(:second)
-      url = Token.signed_url("/files/abc", @secret, "abc", expires_in: 60)
-
-      # Extract expires from URL
-      %{query: query} = URI.parse(url)
-      params = URI.decode_query(query)
-      {expires, ""} = Integer.parse(params["expires"])
-
-      # Should expire ~60 seconds from now
-      assert expires >= now + 59
-      assert expires <= now + 61
-    end
-  end
-
-  # Claim tokens (`sign/3` with a map of claims, `verify/3`)
-
   @download [purpose: :download]
 
   defp now, do: System.system_time(:second)
@@ -203,7 +137,8 @@ defmodule AshStorage.TokenTest do
             123,
             "",
             "abc",
-            Token.sign(@secret, "k", now() + 3600),
+            # the format before v1: an HMAC of "<key>:<expires_at>"
+            hmac(@secret, "k:#{now() + 3600}"),
             "v1.x",
             token <> ".x",
             "v2." <> payload <> "." <> signature,
@@ -320,6 +255,71 @@ defmodule AshStorage.TokenTest do
 
         error = assert_raise ArgumentError, fn -> Token.verify(token, secret, @download) end
         refute Exception.message(error) =~ "hunter2"
+      end
+    end
+  end
+
+  describe "signed_url/4" do
+    defp url_claims(url) do
+      %URI{path: path, query: query} = URI.parse(url)
+      params = URI.decode_query(query)
+      assert Map.keys(params) == ["token"]
+      assert {:ok, claims} = Token.verify(params["token"], @secret, @download)
+      {path, claims}
+    end
+
+    test "adds one token parameter for the key" do
+      url = Token.signed_url("/files/a/b", @secret, "a/b")
+
+      assert url =~ ~r/\A\/files\/a\/b\?token=v1\.[^&]+\z/
+      assert {"/files/a/b", %{"s" => "a/b"} = claims} = url_claims(url)
+      assert claims["e"] - claims["i"] == 3600
+      refute Enum.any?(["d", "f", "t"], &Map.has_key?(claims, &1))
+    end
+
+    test "turns each option into its claim" do
+      url =
+        Token.signed_url("/files/k", @secret, "k",
+          expires_in: 60,
+          disposition: "attachment",
+          filename: "a b.png",
+          content_type: "image/png"
+        )
+
+      assert {_, claims} = url_claims(url)
+      assert %{"d" => "attachment", "f" => "a b.png", "t" => "image/png"} = claims
+      assert claims["e"] - claims["i"] == 60
+
+      assert {_, %{"d" => "attachment"}} =
+               url_claims(Token.signed_url("/files/k", @secret, "k", disposition: :attachment))
+    end
+
+    test "sets no disposition for inline or nil, and no filename for an empty one" do
+      for opts <- [[disposition: "inline"], [disposition: :inline], [disposition: nil]] do
+        assert {_, claims} = url_claims(Token.signed_url("/files/k", @secret, "k", opts))
+        refute Map.has_key?(claims, "d")
+      end
+
+      assert {_, claims} = url_claims(Token.signed_url("/files/k", @secret, "k", filename: ""))
+      refute Map.has_key?(claims, "f")
+    end
+
+    test "never puts a swapped argument into an error message" do
+      secret = "my-secret-value"
+
+      for fun <- [
+            fn -> Token.signed_url([secret, "old"], "/files/k", "k") end,
+            fn -> Token.signed_url("/files/k", "k", [secret]) end,
+            fn -> Token.signed_url("/files/k", "k", "k", secret) end
+          ] do
+        error = assert_raise ArgumentError, fun
+        refute Exception.message(error) =~ secret
+      end
+    end
+
+    test "raises on invalid options" do
+      for opts <- [[disposition: "x"], [filename: 1], [content_type: :png], [expires_in: 0]] do
+        assert_raise ArgumentError, fn -> Token.signed_url("/files/k", @secret, "k", opts) end
       end
     end
   end

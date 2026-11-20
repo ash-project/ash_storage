@@ -144,20 +144,37 @@ defmodule AshStorage.Plug.ResponseMetadataTest do
     end
   end
 
-  describe "request_overrides/1" do
-    defp overrides(query), do: ResponseMetadata.request_overrides(Plug.Test.conn(:get, query))
+  describe "request_params/2" do
+    defp params(query, access \\ :unsigned),
+      do: ResponseMetadata.request_params(Plug.Test.conn(:get, query), access)
 
-    test "only an exact attachment request narrows the disposition" do
-      assert overrides("/k?disposition=attachment").disposition == :attachment
+    test "reads the query on an unsigned mount, where only an exact attachment narrows" do
+      assert params("/k?disposition=attachment&filename=a%22b.png") ==
+               %{disposition: :attachment, filename: "ab.png", content_type: nil}
 
       for query <- ["?disposition=inline", "?disposition=ATTACHMENT", "?disposition[a]=b", ""] do
-        assert overrides("/k" <> query).disposition == nil
+        assert params("/k" <> query).disposition == nil
       end
     end
 
-    test "ignores a non-string filename" do
-      assert overrides("/k?filename[]=a").filename == nil
-      assert overrides("/k?filename=a%22b").filename == "ab"
+    test "ignores non-string query values" do
+      assert params("/k?filename[]=a").filename == nil
+    end
+
+    test "reads the claims on a signed mount and ignores the query" do
+      claims = %{"s" => "k", "d" => "attachment", "f" => "a\"/b.png", "t" => "image/png"}
+
+      assert params("/k?filename=evil.html", claims) ==
+               %{disposition: :attachment, filename: "ab.png", content_type: "image/png"}
+
+      assert params("/k?disposition=attachment&filename=evil.html", %{"s" => "k"}) ==
+               %{disposition: nil, filename: nil, content_type: nil}
+    end
+
+    test "ignores claim values of the wrong type" do
+      claims = %{"s" => "k", "d" => true, "f" => 1, "t" => ["image/png"]}
+
+      assert params("/k", claims) == %{disposition: nil, filename: nil, content_type: nil}
     end
   end
 end

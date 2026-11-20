@@ -23,7 +23,10 @@ defmodule AshStorage.Plug.Proxy do
   ## Options
 
   - `:service` - (required) the `{module, opts}` tuple for the storage service
-  - `:secret` - secret key for verifying signed URLs
+  - `:secret` - the secret for verifying signed URLs: a binary, a list of
+    binaries (for rotation), or a zero-arity function or `{module, function, args}`
+    that returns one. When set, a request without a valid `token` parameter for
+    its key gets `403`. See [Signed URLs](serving.md#signed-urls).
   - `:inline` - content types that may render in the browser: `:none` (default),
     `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
     Every other type is sent as a download.
@@ -34,16 +37,21 @@ defmodule AshStorage.Plug.Proxy do
 
   Every response carries `X-Content-Type-Options: nosniff`, and only `GET` and
   `HEAD` are answered (`405` otherwise). A file is sent with
-  `Content-Disposition: attachment` unless its content type is in `:inline`;
-  `?disposition=attachment` forces a download and `?filename=` sets the download
-  name, but a request cannot make a file render inline.
+  `Content-Disposition: attachment` unless its content type is in `:inline`.
+
+  On a signed mount the token decides: it may force a download and set the
+  download name, and the `disposition` and `filename` query parameters are
+  ignored. On an unsigned mount `?disposition=attachment` forces a download and
+  `?filename=` sets the download name. Neither can make a file render inline.
 
   A request whose key is empty, contains a control character, starts with `/`
   or `\\`, or has a `..` segment gets `404` before the signature is checked and
   without a call to the service. See [Storage keys](storage-keys.md).
 
-  The content type comes from the key's extension. Generated keys have none, so
-  on this plug `:inline` only takes effect for keys with an extension, or through
+  On a signed mount the content type comes from the token's content type, else
+  from the extension of the token's filename, else from the key. On an unsigned
+  mount it comes from the key's extension. Generated keys have none, so there
+  `:inline` only takes effect for keys with an extension, or through
   `:content_type_fallback` on a mount that holds one kind of file. See
   [Serving files](serving.md).
   """
@@ -51,16 +59,16 @@ defmodule AshStorage.Plug.Proxy do
   @behaviour Plug
 
   alias AshStorage.Plug.ResponseMetadata
+  alias AshStorage.Plug.SignedRequest
 
   @impl true
   def init(opts) do
     {service_mod, service_opts} = Keyword.fetch!(opts, :service)
 
-    Map.merge(ResponseMetadata.init(opts), %{
-      service_mod: service_mod,
-      service_opts: service_opts,
-      secret: Keyword.get(opts, :secret)
-    })
+    opts
+    |> ResponseMetadata.init()
+    |> Map.merge(SignedRequest.init(opts))
+    |> Map.merge(%{service_mod: service_mod, service_opts: service_opts})
   end
 
   @impl true
@@ -79,17 +87,20 @@ defmodule AshStorage.Plug.Proxy do
     if match?({:error, _}, AshStorage.Key.validate_lookup(key)) do
       conn |> Plug.Conn.send_resp(404, "Not Found") |> Plug.Conn.halt()
     else
-      case verify_signature(conn, opts) do
-        :ok ->
+      case SignedRequest.verify(conn, key, opts) do
+        {:ok, access} ->
           ctx = AshStorage.Service.Context.new(opts.service_opts)
 
           case opts.service_mod.download(key, ctx) do
             {:ok, data} ->
-              content_type =
-                ResponseMetadata.content_type(key: key, fallback: opts.content_type_fallback)
+              request = ResponseMetadata.request_params(conn, access)
 
               conn
-              |> ResponseMetadata.put_file_headers(content_type, opts.inline)
+              |> ResponseMetadata.put_file_headers(
+                content_type(request, access, key, opts),
+                opts.inline,
+                request
+              )
               |> Plug.Conn.send_resp(200, data)
               |> Plug.Conn.halt()
 
@@ -100,31 +111,20 @@ defmodule AshStorage.Plug.Proxy do
               conn |> Plug.Conn.send_resp(502, "Bad Gateway") |> Plug.Conn.halt()
           end
 
-        {:error, :forbidden} ->
+        {:error, _reason} ->
           conn |> Plug.Conn.send_resp(403, "Forbidden") |> Plug.Conn.halt()
       end
     end
   end
 
-  defp verify_signature(_conn, %{secret: nil}), do: :ok
-
-  defp verify_signature(conn, %{secret: secret}) do
-    params = Plug.Conn.fetch_query_params(conn).query_params
-
-    with token when is_binary(token) <- params["token"],
-         expires when is_binary(expires) <- params["expires"],
-         {expires_at, ""} <- Integer.parse(expires),
-         true <- expires_at > System.system_time(:second) do
-      key = conn.path_info |> Enum.join("/")
-      expected = AshStorage.Token.sign(secret, key, expires_at)
-
-      if Plug.Crypto.secure_compare(token, expected) do
-        :ok
-      else
-        {:error, :forbidden}
-      end
-    else
-      _ -> {:error, :forbidden}
-    end
+  # On an unsigned mount the filename comes from the query, and the requester
+  # does not get to choose the content type with it.
+  defp content_type(request, access, key, opts) do
+    ResponseMetadata.content_type(
+      declared: request.content_type,
+      filename: if(access != :unsigned, do: request.filename),
+      key: key,
+      fallback: opts.content_type_fallback
+    )
   end
 end
