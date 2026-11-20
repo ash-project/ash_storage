@@ -114,9 +114,9 @@ post.cover_image.blob.variants
 
 ## Purging
 
-Variants go with their source. Purging an attachment, a `dependent: :purge` destroy and
-the `:purge_blob` action all remove the source blob's variant rows before its own row,
-and delete the variants' files with the source's.
+Variants go with their source. Purging an attachment, replacing a `has_one_attached`
+file, a `dependent: :purge` destroy and the `:purge_blob` action all remove the source
+blob's variant rows before its own row, and delete the variants' files with the source's.
 
 ## Cache invalidation via digest
 

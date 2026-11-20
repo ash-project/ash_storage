@@ -209,20 +209,6 @@ defmodule AshStorage.Operations do
     service_mod.delete(key, ctx)
   end
 
-  @doc false
-  def delete_blob_file(blob, service_mod, %Context{} = ctx) do
-    stored_opts = Target.persisted_service_opts(blob)
-
-    service_opts =
-      if blob.service_name == service_mod do
-        Keyword.merge(ctx.service_opts, stored_opts)
-      else
-        stored_opts
-      end
-
-    blob.service_name.delete(blob.key, %{ctx | service_opts: service_opts})
-  end
-
   @doc """
   Download a blob's bytes from its storage service, verifying the body's MD5
   against `blob.checksum` when one is recorded.

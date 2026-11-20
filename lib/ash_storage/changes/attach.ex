@@ -3,7 +3,7 @@ defmodule AshStorage.Changes.Attach do
   use Ash.Resource.Change
 
   alias AshStorage.Pipeline
-  alias AshStorage.Pipeline.{Owner, Scope, Target}
+  alias AshStorage.Pipeline.{Hooks, Owner, Scope, Target}
   alias AshStorage.Service.Context
 
   @impl true
@@ -14,6 +14,7 @@ defmodule AshStorage.Changes.Attach do
   @impl true
   def change(changeset, opts, context) do
     attachment_name = opts[:attachment_name]
+    nested? = Hooks.nested?(changeset)
 
     changeset
     |> Ash.Changeset.before_action(fn changeset ->
@@ -35,7 +36,7 @@ defmodule AshStorage.Changes.Attach do
         %{blob: blob, target: target} = attach_context ->
           scope = Scope.from_change(changeset, context)
 
-          with {:ok, _} <- maybe_replace_existing(record, target, scope),
+          with {:ok, deletions} <- replace_existing(record, target, scope),
                {:ok, attachment} <- Pipeline.insert_attachment(record, blob, target, scope),
                :ok <- run_eager_variants(blob, target, scope),
                {:ok, blob} <- store_oban_variants(blob, target, scope) do
@@ -51,6 +52,7 @@ defmodule AshStorage.Changes.Attach do
               record
               |> Ash.Resource.put_metadata(:blob, blob)
               |> Ash.Resource.put_metadata(:attachment, attachment)
+              |> Hooks.defer_deletions(deletions, nested?)
 
             {:ok, record}
           end
@@ -59,6 +61,7 @@ defmodule AshStorage.Changes.Attach do
           {:ok, record}
       end
     end)
+    |> Hooks.delete_after_transaction(nested?)
   end
 
   defp do_attach(record, attachment_name, changeset, scope) do
@@ -335,34 +338,16 @@ defmodule AshStorage.Changes.Attach do
 
   # -- Attachment helpers --
 
-  defp maybe_replace_existing(record, %Target{attachment: %{type: :one}} = target, scope) do
-    with {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
-      case Pipeline.attachments(record, target, scope) do
-        {:ok, []} -> {:ok, :noop}
-        {:ok, existing} -> purge_attachments(existing, service_mod, ctx, scope)
-        {:error, _} = error -> error
-      end
+  # Replacing a has_one file removes the old one through the shared purge; the
+  # old files are deleted once the transaction has committed.
+  defp replace_existing(record, %Target{attachment: %{type: :one}} = target, scope) do
+    with {:ok, existing} <- Pipeline.attachments(record, target, scope),
+         {:ok, %{deletions: deletions}} <- Pipeline.unlink(existing, :purge, target, scope) do
+      {:ok, deletions}
     end
   end
 
-  defp maybe_replace_existing(_record, %Target{attachment: %{type: :many}}, _scope),
-    do: {:ok, :noop}
-
-  defp purge_attachments(attachments, service_mod, ctx, scope) do
-    destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
-
-    Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      blob = att.blob
-
-      with {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts),
-           :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx) do
-        {:cont, {:ok, [att | acc]}}
-      else
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
+  defp replace_existing(_record, %Target{attachment: %{type: :many}}, _scope), do: {:ok, []}
 
   # -- Variant helpers --
 

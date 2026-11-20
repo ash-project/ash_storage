@@ -114,4 +114,22 @@ defmodule AshStorage.PurgeTest do
     assert id == attachment.id
     refute Map.has_key?(record.__metadata__, :__ash_storage_deletions__)
   end
+
+  test "a replacement whose eager variant fails keeps the old file" do
+    post = Ash.create!(AshStorage.Test.MatrixPost, %{slug: "fragile"})
+
+    {:ok, %{blob: old}} =
+      Operations.attach(post, :fragile, "old",
+        filename: "old.bin",
+        content_type: "application/octet-stream"
+      )
+
+    assert {:error, _} =
+             Operations.attach(post, :fragile, "FAIL",
+               filename: "new.txt",
+               content_type: "text/plain"
+             )
+
+    assert Store.exists?(old.key)
+  end
 end

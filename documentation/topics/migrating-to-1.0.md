@@ -281,27 +281,29 @@ render.
 
 ## Purging removes variants, keeps shared blobs and deletes files after the commit
 
-What changed:
+What changed: attaching a file to a `has_one_attached` that already has one
+removes the old file the same way `purge_<name>` does.
 
-- `purge_<name>`, the `dependent` option and the `:purge_blob` action remove a
-  blob's variants before the blob. On Postgres a blob with a variant could not
-  be purged at all; on data layers without foreign keys the variant rows and
-  files were left behind.
-- `purge_<name>` and the `dependent` option remove a blob only when no other
-  attachment row references it. The `:purge_blob` action does not check: it
-  removes the blob it is given.
-- `purge_<name>` deletes the files after the transaction commits, as the
-  `dependent` option already did. A failure later in the same action no longer
-  leaves rows that point at deleted files. Inside a transaction the caller
-  opened, files are still deleted before it commits.
-- A file that cannot be deleted no longer fails `purge_<name>`: the rows are
-  gone, and a warning names the service and the key.
+- `purge_<name>`, a replacement, the `dependent` option and the `:purge_blob`
+  action remove a blob's variants before the blob. On Postgres a blob with a
+  variant could not be purged or replaced at all; on data layers without
+  foreign keys the variant rows and files were left behind.
+- `purge_<name>`, a replacement and the `dependent` option remove a blob only
+  when no other attachment row references it. The `:purge_blob` action does
+  not check: it removes the blob it is given.
+- `purge_<name>` and a replacement delete the files after the transaction
+  commits, as the `dependent` option already did. A failure later in the same
+  action no longer leaves rows that point at deleted files. Inside a
+  transaction the caller opened, files are still deleted before it commits.
+- A file that cannot be deleted no longer fails `purge_<name>` or a
+  replacement: the rows are gone, and a warning names the service and the
+  key.
 
-Who this affects: code that relied on `purge_<name>` failing when the service
-could not delete the file. It now succeeds and logs a warning, and the object
-stays in the store. Code that expects the file to be gone when the action
-returns inside its own transaction is not affected: there the file is still
-deleted before the action returns.
+Who this affects: code that relied on `purge_<name>` or a replacement failing
+when the service could not delete the file. It now succeeds and logs a
+warning, and the object stays in the store. Code that expects the file to be
+gone when the action returns inside its own transaction is not affected: there
+the file is still deleted before the action returns.
 
 What to do: nothing, for most applications. Watch the logs for the warning if
 you need to know about objects left behind. An application that attaches one

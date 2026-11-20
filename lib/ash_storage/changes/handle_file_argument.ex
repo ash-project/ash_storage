@@ -3,7 +3,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
   use Ash.Resource.Change
 
   alias AshStorage.Pipeline
-  alias AshStorage.Pipeline.{Owner, Scope, Target}
+  alias AshStorage.Pipeline.{Hooks, Owner, Scope, Target}
   alias AshStorage.Service.Context
 
   @impl true
@@ -16,6 +16,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
     attachment_name = opts[:attachment]
 
     file = Ash.Changeset.get_argument(changeset, argument_name)
+    nested? = Hooks.nested?(changeset)
 
     if is_nil(file) do
       changeset
@@ -42,7 +43,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
             scope = Scope.from_change(changeset, context)
 
             # On update, replace existing attachment; on create, skip
-            with {:ok, _} <- maybe_replace_on_update(changeset, record, target, scope),
+            with {:ok, deletions} <- replace_on_update(changeset, record, target, scope),
                  {:ok, attachment} <- Pipeline.insert_attachment(record, blob, target, scope) do
               # Now that we have the record ID, update write_target for oban analyzers
               if state[:has_oban_analyzers?] do
@@ -54,6 +55,7 @@ defmodule AshStorage.Changes.HandleFileArgument do
                 record
                 |> Ash.Resource.put_metadata(:"#{attachment_name}_blob", blob)
                 |> Ash.Resource.put_metadata(:"#{attachment_name}_attachment", attachment)
+                |> Hooks.defer_deletions(deletions, nested?)
 
               {:ok, record}
             end
@@ -62,16 +64,14 @@ defmodule AshStorage.Changes.HandleFileArgument do
             {:ok, record}
         end
       end)
+      |> Hooks.delete_after_transaction(nested?)
     end
   end
 
-  defp maybe_replace_on_update(%{action_type: :create}, _record, _target, _scope) do
-    {:ok, :noop}
-  end
+  defp replace_on_update(%{action_type: :create}, _record, _target, _scope), do: {:ok, []}
 
-  defp maybe_replace_on_update(_changeset, record, target, scope) do
-    maybe_replace_existing(record, target, scope)
-  end
+  defp replace_on_update(_changeset, record, target, scope),
+    do: replace_existing(record, target, scope)
 
   defp upload_blob(resource, attachment_name, file, changeset, scope) do
     {filename, content_type} = extract_file_metadata(file)
@@ -365,32 +365,14 @@ defmodule AshStorage.Changes.HandleFileArgument do
   # sobelow_skip ["Traversal.FileModule"]
   defp maybe_cleanup_tempfile(_data, path), do: File.rm(path)
 
-  defp maybe_replace_existing(record, %Target{attachment: %{type: :one}} = target, scope) do
-    with {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
-      case Pipeline.attachments(record, target, scope) do
-        {:ok, []} -> {:ok, :noop}
-        {:ok, existing} -> purge_attachments(existing, service_mod, ctx, scope)
-        {:error, _} = error -> error
-      end
+  # Replacing a has_one file removes the old one through the shared purge; the
+  # old files are deleted once the transaction has committed.
+  defp replace_existing(record, %Target{attachment: %{type: :one}} = target, scope) do
+    with {:ok, existing} <- Pipeline.attachments(record, target, scope),
+         {:ok, %{deletions: deletions}} <- Pipeline.unlink(existing, :purge, target, scope) do
+      {:ok, deletions}
     end
   end
 
-  defp maybe_replace_existing(_record, %Target{attachment: %{type: :many}}, _scope),
-    do: {:ok, :noop}
-
-  defp purge_attachments(attachments, service_mod, ctx, scope) do
-    destroy_opts = Scope.to_opts(scope, action: :destroy, return_destroyed?: true)
-
-    Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      blob = att.blob
-
-      with {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts),
-           :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx) do
-        {:cont, {:ok, [att | acc]}}
-      else
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
+  defp replace_existing(_record, %Target{attachment: %{type: :many}}, _scope), do: {:ok, []}
 end
