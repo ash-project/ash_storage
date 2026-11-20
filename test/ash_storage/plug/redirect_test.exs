@@ -159,6 +159,20 @@ defmodule AshStorage.Plug.RedirectTest do
       end
     end
 
+    test "a mount with :max_lifetime_seconds rejects longer-lived URLs" do
+      path = signed_path("secret.txt", @secret, expires_in: 3600)
+
+      assert call(path, secret: @secret, max_lifetime_seconds: 600).status == 403
+      assert call(path, secret: @secret, max_lifetime_seconds: 3600).status == 302
+    end
+
+    test "a list of secrets accepts URLs signed with any of them" do
+      path = signed_path("secret.txt", "old-secret")
+
+      assert call(path, secret: ["new-secret", "old-secret"]).status == 302
+      assert call(path, secret: ["new-secret"]).status == 403
+    end
+
     test "an unsigned mount ignores a token parameter" do
       assert call("/secret.txt?token=garbage").status == 302
     end

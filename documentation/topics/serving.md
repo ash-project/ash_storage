@@ -131,6 +131,76 @@ reach outside the store gets `404` before the token is checked.
   can use it until it expires, and query strings end up in logs and browser
   history. Keep `expires_in` short.
 
+### Secrets
+
+The `:secret` of a mount and of the Disk service is one of:
+
+- a binary of at least 32 random bytes, for example from
+  `:crypto.strong_rand_bytes(32) |> Base.url_encode64()`;
+- a list of binaries: URLs are signed with the first and accepted with any;
+- a zero-arity function or a `{module, function, args}` tuple that returns one
+  of the above. It is called on every request and every signed URL.
+
+A mount checks the shape of `:secret` in its `init/1` and raises
+`ArgumentError` for anything else. `Plug.Builder` and `Plug.Router` call
+`init/1` when they are compiled; a Phoenix router's `forward` calls it on every
+request. A function or MFA is not called by `init/1`. It is called when a
+request carries a token, and if it returns anything else, such as `nil` from an
+unset environment variable, that request raises. A request without a token gets
+`403` without calling it. Either way the mount does not become unsigned.
+
+Only leaving out `:secret`, or a `:secret` that is `nil`, makes a mount
+unsigned. So when the variable is not set,
+`secret: System.get_env("STORAGE_SECRET")` leaves the mount unsigned, and it
+serves every file without a token. Use a function or an MFA for a value read at
+runtime: it raises instead.
+
+In a Phoenix router the options of `forward` are evaluated when the router is
+compiled. A literal or `System.get_env/1` there is fixed at compile time, and
+an anonymous function does not compile, because the options must be stored in
+the compiled router. Read the secret at runtime with an MFA or a remote
+function capture such as `&MyApp.Secrets.storage/0`, which both work there:
+
+```elixir
+forward "/files", AshStorage.Plug.DiskServe,
+  root: "priv/storage",
+  secret: {MyApp.Secrets, :storage, []}
+```
+
+```elixir
+defmodule MyApp.Secrets do
+  def storage, do: Application.fetch_env!(:my_app, :storage_secret)
+end
+```
+
+Give the Disk service the same MFA or capture. An anonymous function, such as
+`fn -> ... end`, works only where the options are built at runtime.
+
+To rotate a secret without breaking the URLs that are out:
+
+1. add the new secret after the old one, `[old, new]`, on every mount, so both
+   are accepted;
+2. put the new one first, `[new, old]`, on the mounts and on the service, so
+   new URLs are signed with it;
+3. remove the old one once the longest `expires_in` has passed.
+
+### Limiting lifetime
+
+`max_lifetime_seconds` on a mount rejects a URL that was issued for a longer
+lifetime, however much time it has left:
+
+```elixir
+forward "/files", AshStorage.Plug.DiskServe,
+  root: "priv/storage",
+  secret: {MyApp.Secrets, :storage, []},
+  max_lifetime_seconds: 600
+```
+
+It compares the token's issue time with its expiry, so clocks that differ
+between the instance that signed the URL and the one that serves it do not
+affect it. Keep the service's `expires_in` at or below the mount's maximum, or
+every URL it signs is rejected.
+
 ## Redirects
 
 `AshStorage.Plug.Redirect` takes the same `:inline` and 

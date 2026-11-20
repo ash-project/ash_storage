@@ -402,7 +402,8 @@ its content type is allowed by the mount's `:inline` option. `AshStorage.Plug.Re
 pass that decision to the storage service, and S3 URLs do not carry it yet.
 With a `:secret`, a mount serves only signed URLs, such as those the Disk service builds with the
 same secret. The token in the URL covers the key, the expiry and the response parameters, so a URL
-holder cannot change them.
+holder cannot change them. Secrets can be rotated and read at runtime, and a mount can cap the
+lifetime of the URLs it accepts with `max_lifetime_seconds`.
 See [Serving files](documentation/topics/serving.md) for the options and for serving user content
 from a separate origin.
 

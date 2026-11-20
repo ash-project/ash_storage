@@ -27,6 +27,10 @@ defmodule AshStorage.Plug.Proxy do
     binaries (for rotation), or a zero-arity function or `{module, function, args}`
     that returns one. When set, a request without a valid `token` parameter for
     its key gets `403`. See [Signed URLs](serving.md#signed-urls).
+  - `:max_lifetime_seconds` - the longest lifetime a signed URL may have been
+    issued with, a positive integer. A URL issued for longer gets `403`, however
+    much time it has left. Requires `:secret`. See
+    [Limiting lifetime](serving.md#limiting-lifetime).
   - `:inline` - content types that may render in the browser: `:none` (default),
     `:images`, `:documents`, or a list such as `["image/png", "application/pdf"]`.
     Every other type is sent as a download.
