@@ -29,8 +29,7 @@ defmodule AshStorage.Test.MultipartEtagPost do
       require_atomic? false
       argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob,
-              argument: :cover_image_blob_id, attachment: :cover_image}
+      change attach_blob(:cover_image, argument: :cover_image_blob_id)
     end
   end
 end

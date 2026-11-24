@@ -97,8 +97,7 @@ defmodule AshStorage.Test.AnalyzablePost do
       accept [:title]
       argument :document_file, Ash.Type.File, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument,
-              argument: :document_file, attachment: :document}
+      change attach_file(:document, argument: :document_file)
     end
   end
 end

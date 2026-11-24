@@ -138,10 +138,12 @@ defmodule AshStorage do
 
   use Spark.Dsl.Extension,
     sections: [@storage],
+    imports: [AshStorage.Changes.Builtins],
     transformers: [AshStorage.Transformers.SetupStorage],
     verifiers: [
       AshStorage.Verifiers.ValidateObanAnalyzers,
-      AshStorage.Verifiers.ValidateObanVariants
+      AshStorage.Verifiers.ValidateObanVariants,
+      AshStorage.Verifiers.ValidateAttachChanges
     ]
 
   @doc """

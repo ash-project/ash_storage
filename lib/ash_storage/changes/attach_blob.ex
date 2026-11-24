@@ -2,6 +2,11 @@ defmodule AshStorage.Changes.AttachBlob do
   @moduledoc """
   An action change that attaches a pre-uploaded blob (by ID) to the record.
 
+  In a resource that uses the `AshStorage` extension, write it as
+  `change attach_blob(:cover_image, argument: :cover_image_blob_id)`; see
+  `AshStorage.Changes.Builtins.attach_blob/2`. The module and its options below
+  are what that call expands to.
+
   Used for direct uploads where the file was uploaded directly to storage
   (e.g. via an S3 presigned URL or Azure Blob SAS URL) and the blob record already
   exists.
@@ -10,8 +15,7 @@ defmodule AshStorage.Changes.AttachBlob do
         accept [:title]
         argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-        change {AshStorage.Changes.AttachBlob,
-                argument: :cover_image_blob_id, attachment: :cover_image}
+        change attach_blob(:cover_image, argument: :cover_image_blob_id)
       end
 
   The blob is confirmed with the service before the record is written. The

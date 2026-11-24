@@ -396,3 +396,31 @@ leave the database's key as it is. If you generate migrations from your
 resources, check the next generated migration before running it: the
 database's key must stay as it is. Attachments written before for a composite key that included
 `:id` are found by that `:id` value, so check whether records shared them.
+
+## `attach_file/2` and `attach_blob/2` are imported into resources
+
+What changed: the `AshStorage` extension imports
+`AshStorage.Changes.Builtins.attach_file/2` and
+`AshStorage.Changes.Builtins.attach_blob/2` into every resource that uses it,
+so actions can write `change attach_file(:cover_image)` and
+`change attach_blob(:cover_image, argument: :cover_image_blob_id)`.
+
+The `change` entries of each create and update action that attach from an
+argument are also checked when the resource compiles. An attachment the
+resource does not declare, or an argument the action does not have, is
+reported as a warning naming the action. If it is left in, an action with a
+wrong attachment fails when it is given a file or blob id and attaches nothing
+when it is not; an action without the argument never attaches anything. With
+`mix compile --warnings-as-errors` the warning fails the build. Changes in
+the resource's `changes` section are not checked.
+
+Who this affects: a resource module that defines its own function named
+`attach_file` or `attach_blob` with one or two arguments and calls it inside
+the module. That call now clashes with the import and the module does not
+compile. Code interface functions with those names are not affected. An action
+whose change tuple names a wrong attachment or argument, or an argument that
+is only set programmatically and not declared on the action, now gets the
+warning.
+
+What to do: rename such a local function. The module tuples keep working, but
+the guides now use the builtins.
