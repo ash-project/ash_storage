@@ -5,6 +5,8 @@ defmodule AshStorage.Plug.DiskServeTest do
 
   alias AshStorage.Plug.DiskServe
 
+  import AshStorage.Test.SignedUrls
+
   @root Path.join(
           System.tmp_dir!(),
           "ash_storage_disk_serve_test_#{System.unique_integer([:positive])}"
@@ -21,6 +23,9 @@ defmodule AshStorage.Plug.DiskServeTest do
     on_exit(fn -> File.rm_rf!(@root) end)
     :ok
   end
+
+  # Stands for a secret read from an environment variable that is not set.
+  def unset_secret, do: nil
 
   defp call(path, opts \\ []), do: request(:get, path, opts)
 
@@ -39,6 +44,20 @@ defmodule AshStorage.Plug.DiskServeTest do
     end
   end
 
+  # A fresh root holding the key `tenant1/abc123`, as written for a tenant.
+  defp tenant_root do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "ash_storage_disk_serve_tenant_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(root, "tenant1"))
+    File.write!(Path.join(root, "tenant1/abc123"), "hello")
+    on_exit(fn -> File.rm_rf!(root) end)
+    root
+  end
+
   describe "serving files" do
     test "serves a file with correct content" do
       conn = call("/hello.txt")
@@ -54,16 +73,18 @@ defmodule AshStorage.Plug.DiskServeTest do
       assert content_type =~ "text/plain"
     end
 
-    test "serves file via key/filename path" do
-      conn = call("/#{@hex_key}/image.svg")
+    test "takes the content type and the download name from ?filename=" do
+      conn = call("/#{@hex_key}?filename=image.svg")
       assert conn.status == 200
       assert conn.resp_body == "<svg/>"
+      assert header(conn, "content-type") =~ "image/svg+xml"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="image.svg")
     end
 
-    test "sets content-type from display filename in key/filename path" do
+    test "a URL of the old /<key>/<filename> shape is a 404" do
       conn = call("/#{@hex_key}/image.svg")
-      [content_type] = Plug.Conn.get_resp_header(conn, "content-type")
-      assert content_type =~ "image/svg+xml"
+      assert conn.status == 404
+      refute conn.resp_body =~ "svg"
     end
 
     test "returns 404 for missing files" do
@@ -80,75 +101,114 @@ defmodule AshStorage.Plug.DiskServeTest do
   describe "signed URLs" do
     @secret "test-secret-32bytes!!!!!!!!!!!!!!"
 
-    test "rejects requests without token" do
-      conn = call("/hello.txt", secret: @secret)
-      assert conn.status == 403
-    end
-
-    test "rejects requests with invalid token" do
-      conn =
-        conn(:get, "/hello.txt?token=invalid&expires=#{System.system_time(:second) + 3600}")
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
-
-      assert conn.status == 403
-    end
-
-    test "rejects expired tokens" do
-      expired = System.system_time(:second) - 10
-      token = AshStorage.Token.sign(@secret, "hello.txt", expired)
-
-      conn =
-        conn(:get, "/hello.txt?token=#{token}&expires=#{expired}")
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
-
-      assert conn.status == 403
-    end
-
-    test "serves file with valid token" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "hello.txt", expires)
-
-      conn =
-        conn(:get, "/hello.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
+    test "serves a file with a valid token" do
+      conn = call(signed_path("hello.txt", @secret), secret: @secret)
 
       assert conn.status == 200
       assert conn.resp_body == "hello world"
     end
 
-    test "serves file with valid token using key/filename path" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, @hex_key, expires)
+    test "rejects a missing, a malformed and another key's token" do
+      for path <- ["/hello.txt", "/hello.txt?token=garbage", signed_path("other.txt", @secret)] do
+        path = String.replace(path, "/other.txt", "/hello.txt")
+        conn = call(path, secret: @secret)
 
-      conn =
-        conn(
-          :get,
-          "/#{@hex_key}/image.svg?token=#{URI.encode_www_form(token)}&expires=#{expires}"
+        assert conn.status == 403, "expected 403 for #{path}"
+        assert conn.resp_body == "Forbidden"
+      end
+    end
+
+    test "rejects missing, altered, expired and foreign tokens" do
+      assert call(crafted_path("hello.txt", @secret), secret: @secret).status == 200
+
+      for {description, path} <- rejected_paths("hello.txt", @secret) do
+        conn = call(path, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{description}"
+        assert conn.resp_body == "Forbidden"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        refute conn.resp_body =~ "hello world"
+      end
+    end
+
+    test "a mount with :max_lifetime_seconds rejects longer-lived URLs" do
+      path = signed_path("hello.txt", @secret, expires_in: 3600)
+
+      assert call(path, secret: @secret, max_lifetime_seconds: 600).status == 403
+      assert call(path, secret: @secret, max_lifetime_seconds: 3600).status == 200
+    end
+
+    test "a list of secrets accepts URLs signed with any of them" do
+      path = signed_path("hello.txt", "old-secret")
+
+      assert call(path, secret: ["new-secret", "old-secret"]).status == 200
+      assert call(path, secret: ["new-secret"]).status == 403
+    end
+
+    test "a secret function that returns nothing raises instead of serving unsigned" do
+      opts = DiskServe.init(root: @root, secret: {__MODULE__, :unset_secret, []})
+
+      assert_raise ArgumentError, fn ->
+        conn(:get, signed_path("hello.txt", @secret)) |> DiskServe.call(opts)
+      end
+    end
+
+    test "an unsigned mount ignores a token parameter" do
+      assert call("/hello.txt?token=garbage").status == 200
+    end
+
+    test "serves a URL from Disk.url/2 with a filename" do
+      ctx =
+        AshStorage.Service.Context.new([root: @root, base_url: "", secret: @secret],
+          filename: "image.svg"
         )
-        |> Plug.Conn.fetch_query_params()
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
+
+      conn = call(AshStorage.Service.Disk.url(@hex_key, ctx), secret: @secret)
 
       assert conn.status == 200
       assert conn.resp_body == "<svg/>"
-      [content_type] = Plug.Conn.get_resp_header(conn, "content-type")
-      assert content_type =~ "image/svg+xml"
+      assert header(conn, "content-type") =~ "image/svg+xml"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="image.svg")
     end
 
-    test "rejects token signed with full key/filename path instead of storage key" do
-      expires = System.system_time(:second) + 3600
-      wrong_key = "#{@hex_key}/image.svg"
-      token = AshStorage.Token.sign(@secret, wrong_key, expires)
+    test "the token covers the whole key, not its first segment" do
+      root = tenant_root()
 
-      conn =
-        conn(
-          :get,
-          "/#{@hex_key}/image.svg?token=#{URI.encode_www_form(token)}&expires=#{expires}"
-        )
-        |> Plug.Conn.fetch_query_params()
-        |> DiskServe.call(DiskServe.init(root: @root, secret: @secret))
+      path =
+        "/tenant1/abc123?" <>
+          (signed_path("tenant1", @secret) |> URI.parse() |> Map.fetch!(:query))
+
+      conn = call(path, root: root, secret: @secret)
 
       assert conn.status == 403
+      refute conn.resp_body =~ "hello"
+    end
+
+    test "a requester cannot choose the content type (#68)" do
+      File.write!(Path.join(@root, "flatkey"), "<script>alert(1)</script>")
+      ctx = AshStorage.Service.Context.new(root: @root, base_url: "", secret: @secret)
+      opts = [secret: @secret, inline: ["text/html", "image/png"]]
+      "/flatkey?" <> query = AshStorage.Service.Disk.url("flatkey", ctx)
+
+      conn = call("/flatkey/x.html?" <> query, opts)
+      assert conn.status == 403
+      refute conn.resp_body =~ "script"
+
+      conn = call("/flatkey?" <> query <> "&filename=x.html", opts)
+      assert conn.status == 200
+      assert header(conn, "content-type") =~ "application/octet-stream"
+      assert header(conn, "content-disposition") == "attachment"
+    end
+
+    test "the mount's :inline list stays the ceiling for a signed content type" do
+      conn =
+        call(signed_path(@hex_key, @secret, content_type: "text/html"),
+          secret: @secret,
+          inline: :images
+        )
+
+      assert header(conn, "content-type") =~ "text/html"
+      assert header(conn, "content-disposition") == "attachment"
     end
   end
 
@@ -180,53 +240,41 @@ defmodule AshStorage.Plug.DiskServeTest do
     @secret "test-secret-32bytes!!!!!!!!!!!!!!"
 
     test "a file requested as HTML downloads instead of rendering" do
-      conn = call("/#{@hex_key}/evil.html")
+      conn = call("/#{@hex_key}?filename=evil.html")
       assert conn.status == 200
       assert header(conn, "content-type") =~ "text/html"
-      assert header(conn, "content-disposition") == "attachment"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="evil.html")
       assert header(conn, "x-content-type-options") == "nosniff"
     end
 
     test "SVG is not rendered inline by the built-in sets" do
-      conn = call("/#{@hex_key}/image.svg", inline: :documents)
+      conn = call("/#{@hex_key}?filename=image.svg", inline: :documents)
       assert header(conn, "content-type") =~ "image/svg+xml"
-      assert header(conn, "content-disposition") == "attachment"
+      assert header(conn, "content-disposition") == ~s(attachment; filename="image.svg")
     end
 
     test "images render inline only when allowlisted and not forced to download" do
-      path = "/#{@hex_key}/photo.png"
+      path = "/#{@hex_key}?filename=photo.png"
 
-      assert header(call(path), "content-disposition") == "attachment"
-      assert header(call(path, inline: :images), "content-disposition") == "inline"
+      assert header(call(path), "content-disposition") == ~s(attachment; filename="photo.png")
+
+      assert header(call(path, inline: :images), "content-disposition") ==
+               ~s(inline; filename="photo.png")
 
       assert header(
-               call(path <> "?disposition=attachment", inline: :images),
+               call(path <> "&disposition=attachment", inline: :images),
                "content-disposition"
              ) ==
-               "attachment"
+               ~s(attachment; filename="photo.png")
     end
 
     test "a request cannot widen the policy" do
-      conn = call("/#{@hex_key}/evil.html?disposition=inline", inline: :images)
-      assert header(conn, "content-disposition") == "attachment"
+      conn = call("/#{@hex_key}?filename=evil.html&disposition=inline", inline: :images)
+      assert header(conn, "content-disposition") == ~s(attachment; filename="evil.html")
     end
 
-    test "a signed URL with an HTML name appended still downloads" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, @hex_key, expires)
-
-      conn =
-        call("/#{@hex_key}/x.html?token=#{URI.encode_www_form(token)}&expires=#{expires}",
-          secret: @secret
-        )
-
-      assert conn.status == 200
-      assert header(conn, "content-type") =~ "text/html"
-      assert header(conn, "content-disposition") == "attachment"
-    end
-
-    test "a trailing segment without a known extension falls back to the key" do
-      assert header(call("/hello.txt/noext"), "content-type") =~ "text/plain"
+    test "a filename without a known extension falls back to the key" do
+      assert header(call("/hello.txt?filename=noext"), "content-type") =~ "text/plain"
     end
 
     test "uses :content_type_fallback when the path gives no type" do
@@ -319,9 +367,15 @@ defmodule AshStorage.Plug.DiskServeTest do
       assert call_with_path_info([".."], root, secret: @secret).status == 404
     end
 
-    test "a key that names a directory is a 404", %{root: root} do
-      assert call_with_path_info(["tenant-1"], root).status == 404
-      assert call_with_path_info(["tenant-1", "abc123"], root).status == 404
+    test "a key that names a directory or a path below a file is a 404", %{root: root} do
+      File.write!(Path.join(root, "hello.txt"), "hello world")
+
+      for path_info <- [["tenant-1"], ["hello.txt", "noext"], [".."]] do
+        conn = call_with_path_info(path_info, root)
+
+        assert conn.status == 404, "expected 404 for #{inspect(path_info)}"
+        assert conn.resp_body == "Not Found"
+      end
     end
 
     test "still serves a key that the write-side rules now reject", %{root: root} do
@@ -329,6 +383,84 @@ defmodule AshStorage.Plug.DiskServeTest do
 
       assert conn.status == 200
       assert conn.resp_body == "backslash"
+    end
+  end
+
+  describe "keys that contain / (#73)" do
+    @secret "test-secret-32bytes!!!!!!!!!!!!!!"
+
+    test "a signed URL from Disk.url/2 is served" do
+      root = tenant_root()
+      ctx = AshStorage.Service.Context.new(root: root, base_url: "", secret: @secret)
+
+      conn = call(AshStorage.Service.Disk.url("tenant1/abc123", ctx), root: root, secret: @secret)
+
+      assert conn.status == 200
+      assert conn.resp_body == "hello"
+    end
+
+    test "an unsigned request is served" do
+      root = tenant_root()
+      conn = call("/tenant1/abc123", root: root)
+
+      assert conn.status == 200
+      assert conn.resp_body == "hello"
+    end
+  end
+
+  # POSIX symbolic links; on Windows `File.ln_s/2` needs extra privileges.
+  if match?({:unix, _}, :os.type()) do
+    describe "symbolic links" do
+      @describetag :tmp_dir
+
+      # tmp_dir/root is the mount; outside.txt and outside_dir/ sit next to it.
+      setup %{tmp_dir: tmp_dir} do
+        root = Path.join(tmp_dir, "root")
+        File.mkdir_p!(Path.join(root, "sub"))
+        File.write!(Path.join(root, "real.txt"), "inside")
+        File.write!(Path.join(root, "sub/f"), "inside sub")
+
+        File.write!(Path.join(tmp_dir, "outside.txt"), "outside")
+        File.mkdir_p!(Path.join(tmp_dir, "outside_dir"))
+        File.write!(Path.join(tmp_dir, "outside_dir/f"), "outside dir")
+
+        {:ok, root: root, tmp_dir: tmp_dir}
+      end
+
+      defp link!(root, name, target), do: File.ln_s!(target, Path.join(root, name))
+
+      test "a link that leads outside the root is a 404", %{root: root, tmp_dir: tmp_dir} do
+        link!(root, "up", "../outside.txt")
+        link!(root, "absolute", Path.join(tmp_dir, "outside.txt"))
+        link!(root, "up_dir", "../outside_dir")
+        link!(root, "chain", "chain_next")
+        link!(root, "chain_next", "../outside.txt")
+
+        for path <- ["/up", "/absolute", "/up_dir/f", "/chain"] do
+          conn = call(path, root: root)
+
+          assert conn.status == 404, "expected 404 for #{path}"
+          refute conn.resp_body =~ "outside"
+        end
+      end
+
+      test "a relative link that stays inside the root is followed", %{root: root} do
+        link!(root, "rel", "real.txt")
+        link!(root, "sub_link", "sub")
+
+        assert %{status: 200, resp_body: "inside"} = call("/rel", root: root)
+        assert %{status: 200, resp_body: "inside sub"} = call("/sub_link/f", root: root)
+      end
+
+      # The Disk service refuses every absolute link target, wherever it points.
+      test "a link with an absolute target inside the root is a 404", %{root: root} do
+        link!(root, "absolute_inside", Path.join(root, "real.txt"))
+
+        conn = call("/absolute_inside", root: root)
+
+        assert conn.status == 404
+        refute conn.resp_body =~ "inside"
+      end
     end
   end
 end

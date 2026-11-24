@@ -5,6 +5,8 @@ defmodule AshStorage.Plug.RedirectTest do
 
   alias AshStorage.Plug.Redirect
 
+  import AshStorage.Test.SignedUrls
+
   defmodule CapturingService do
     @moduledoc false
     # Reports the options `url/2` receives to the test process.
@@ -119,67 +121,78 @@ defmodule AshStorage.Plug.RedirectTest do
   describe "signed URLs" do
     @secret "redirect-secret-key-32bytes!!!!!!"
 
-    test "rejects requests without a token" do
-      conn = call("/secret.txt", secret: @secret)
-
-      assert conn.status == 403
-    end
-
-    test "rejects expired tokens" do
-      expires = System.system_time(:second) - 60
-      token = AshStorage.Token.sign(@secret, "secret.txt", expires)
-
-      plug_opts =
-        Redirect.init(
-          service: {AshStorage.Service.Test, base_url: "https://cdn.example/storage"},
-          secret: @secret
-        )
-
-      conn =
-        conn(:get, "/secret.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> Redirect.call(plug_opts)
-
-      assert conn.status == 403
-    end
-
-    test "rejects tampered tokens" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "different-key.txt", expires)
-
-      plug_opts =
-        Redirect.init(
-          service: {AshStorage.Service.Test, base_url: "https://cdn.example/storage"},
-          secret: @secret
-        )
-
-      conn =
-        conn(:get, "/secret.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> Redirect.call(plug_opts)
-
-      assert conn.status == 403
-    end
-
-    test "redirects when token is valid" do
-      expires = System.system_time(:second) + 3600
-      token = AshStorage.Token.sign(@secret, "secret.txt", expires)
-
-      plug_opts =
-        Redirect.init(
-          service: {AshStorage.Service.Test, base_url: "https://cdn.example/storage"},
-          secret: @secret
-        )
-
-      conn =
-        conn(:get, "/secret.txt?token=#{URI.encode_www_form(token)}&expires=#{expires}")
-        |> Plug.Conn.fetch_query_params()
-        |> Redirect.call(plug_opts)
+    test "redirects when the token is valid" do
+      conn = call(signed_path("secret.txt", @secret), secret: @secret)
 
       assert conn.status == 302
 
       assert ["https://cdn.example/storage/secret.txt"] =
                Plug.Conn.get_resp_header(conn, "location")
+    end
+
+    test "rejects a missing, a malformed and another key's token without asking for a URL" do
+      service = {CapturingService, test_pid: self()}
+
+      for path <- ["/secret.txt", "/secret.txt?token=garbage", signed_path("other.txt", @secret)] do
+        path = String.replace(path, "/other.txt", "/secret.txt")
+        conn = call(path, service: service, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{path}"
+        assert header(conn, "location") == nil
+        refute_received {:url_called, _, _}
+      end
+    end
+
+    test "rejects missing, altered, expired and foreign tokens without asking for a URL" do
+      service = {CapturingService, test_pid: self()}
+
+      assert call(crafted_path("secret.txt", @secret), secret: @secret).status == 302
+
+      for {description, path} <- rejected_paths("secret.txt", @secret) do
+        conn = call(path, service: service, secret: @secret)
+
+        assert conn.status == 403, "expected 403 for #{description}"
+        assert conn.resp_body == "Forbidden"
+        assert header(conn, "x-content-type-options") == "nosniff"
+        assert header(conn, "location") == nil
+        refute_received {:url_called, _, _}
+      end
+    end
+
+    test "a mount with :max_lifetime_seconds rejects longer-lived URLs" do
+      path = signed_path("secret.txt", @secret, expires_in: 3600)
+
+      assert call(path, secret: @secret, max_lifetime_seconds: 600).status == 403
+      assert call(path, secret: @secret, max_lifetime_seconds: 3600).status == 302
+    end
+
+    test "a list of secrets accepts URLs signed with any of them" do
+      path = signed_path("secret.txt", "old-secret")
+
+      assert call(path, secret: ["new-secret", "old-secret"]).status == 302
+      assert call(path, secret: ["new-secret"]).status == 403
+    end
+
+    test "an unsigned mount ignores a token parameter" do
+      assert call("/secret.txt?token=garbage").status == 302
+    end
+
+    test "parameters added to a signed URL do not reach Azure (#68)" do
+      path = signed_path("doc.pdf", @secret) <> "&disposition=attachment&filename=evil.exe"
+
+      assert azure_params(path, secret: @secret) == %{"rscd" => "attachment"}
+    end
+
+    test "the claims reach the service" do
+      path = signed_path("abc123", @secret, disposition: "attachment", filename: ~s(a"/b.png))
+      opts = captured_opts(path, secret: @secret)
+      assert opts[:disposition] == "attachment"
+      assert opts[:filename] == "ab.png"
+
+      path = signed_path("abc123", @secret, content_type: "image/png")
+      opts = captured_opts(path, secret: @secret, inline: :images)
+      assert opts[:content_type] == "image/png"
+      refute Keyword.has_key?(opts, :disposition)
     end
   end
 

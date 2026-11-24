@@ -400,6 +400,10 @@ forward "/files", AshStorage.Plug.DiskServe, root: "priv/storage", inline: :imag
 The serving plugs send `X-Content-Type-Options: nosniff` and serve every file as a download unless
 its content type is allowed by the mount's `:inline` option. `AshStorage.Plug.Redirect` can only
 pass that decision to the storage service, and S3 URLs do not carry it yet.
+With a `:secret`, a mount serves only signed URLs, such as those the Disk service builds with the
+same secret. The token in the URL covers the key, the expiry and the response parameters, so a URL
+holder cannot change them. Secrets can be rotated and read at runtime, and a mount can cap the
+lifetime of the URLs it accepts with `max_lifetime_seconds`.
 See [Serving files](documentation/topics/serving.md) for the options and for serving user content
 from a separate origin.
 
@@ -409,7 +413,7 @@ from a separate origin.
 - ~~**Variants**~~ ✅ — File transformations: image resizing/conversion, PDF-to-thumbnail, video thumbnails, and any custom transform. Subsumes the previewer concept — a PDF thumbnail is just a variant. Three generation modes: `:on_demand` (default, generated inline on first URL request), `:eager` (during attach), `:oban` (background job via AshOban). Variant blobs are self-referential on the blob resource with digest-based cache invalidation. Named variants declared in DSL via `variant :name, {Module, opts}`. Custom transformers implement `AshStorage.Variant` behaviour.
 - **Per-variant oban jobs** — Currently all pending variants for a blob run in a single oban job. Refactor so each variant gets its own job lifecycle, enabling parallel generation and independent retries.
 - **Checksum verification (partial)**~~ ✅ — Server-side uploads send `Content-MD5` so S3/Azure reject corrupted bodies at the edge; Azure also persists the MD5 via `x-ms-blob-content-md5`. Direct uploads are auto-confirmed by `AttachBlob` against `Service.head/2` before linking. Downloads verified via `Operations.download/2`. Multipart/block-based verification is documented in `documentation/topics/checksum-verification.md` and ships when multipart upload itself does.
-- ~~**Redirect handler**~~ ✅ — `AshStorage.Plug.Redirect` issues an HTTP redirect (default 302) to the underlying service's `url/2` instead of streaming bytes. Useful when you want app-level auth/signature checks but don't want to proxy bytes through the application. Supports the same `?token=&expires=` HMAC verification as `AshStorage.Plug.Proxy`, and passes the resulting disposition and a cleaned filename to the service's `url/2`; whether they reach the final URL depends on the service.
+- ~~**Redirect handler**~~ ✅ — `AshStorage.Plug.Redirect` issues an HTTP redirect (default 302) to the underlying service's `url/2` instead of streaming bytes. Useful when you want app-level auth/signature checks but don't want to proxy bytes through the application. Supports the same signed-URL verification (`?token=`) as `AshStorage.Plug.Proxy`, and passes the resulting disposition and a cleaned filename to the service's `url/2`; whether they reach the final URL depends on the service.
 - ~~**Mirroring**~~ ✅ — `AshStorage.Service.Mirror` fans `upload`/`delete` out across an ordered list of child services for redundancy. Reads consult the primary first and fall through to secondaries on `:not_found`. `url/2` and `direct_upload/2` go through the primary. Strict, sequential, fail-fast.
 - **Orphan cleanup** — Periodic cleanup of blobs without files or files without blobs. With AshOban: scheduled job. Without: manual invocation via `AshStorage.Operations.cleanup_orphans/1`.
 

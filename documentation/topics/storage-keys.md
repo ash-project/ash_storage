@@ -163,6 +163,16 @@ starts with `/` or `\`, or has a `..` segment. They do not apply the other
 rules, so files stored before the rules existed can still be served.
 `AshStorage.Plug.Proxy` and `AshStorage.Plug.Redirect` then hand the key to the
 service, which keeps its own checks; the Disk service refuses any key that would
-resolve outside its root. `AshStorage.Plug.DiskServe` does not go through the
-Disk service: it reads the file named by the first path segment from its own
-`:root`, and follows symbolic links found there.
+resolve outside its root. `AshStorage.Plug.DiskServe` takes the whole request
+path below the mount as the key and resolves it with the same code as the Disk
+service, under its own `:root`, so it serves only what the service would read.
+
+While a key is resolved, a symbolic link in any segment, the last one included,
+is followed only when its target is a relative path that stays inside the root.
+A link whose target is an absolute path, even one inside the root, or that
+climbs above the root makes the key unresolvable: `AshStorage.Plug.DiskServe`
+answers `404` and the Disk service returns `{:error, :einval}`. Chains of links
+are resolved one link at a time, and the root itself may be a link. Two things
+are not covered: hard links, which cannot be told apart from the file they
+point to, and a link that is swapped in between the check and the read, by a
+process that can write to the root.

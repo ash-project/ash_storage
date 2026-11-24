@@ -12,13 +12,28 @@ defmodule AshStorage.Service.Disk do
   default they are sent as downloads; see the plug's `:inline` option and
   [Serving files](serving.md).
 
+  Without a `:secret`, `url/2` returns `<base_url>/<key>`. When a filename is
+  known, from the `:filename` option or the context's `:filename` (the URL
+  calculations set it to the blob's filename), it is added as a `filename`
+  query parameter, which the plug uses for the download name and to guess the
+  content type.
+
+  With a `:secret`, `url/2` returns `<base_url>/<key>?token=…`, built by
+  `AshStorage.Token.signed_url/4`. The token covers the key and, when they are
+  known, the filename, the content type (the `:content_type` option, else the
+  context's `:content_type`, which the URL calculations set to the blob's) and
+  a `:disposition` option of `"attachment"`. Mount the plug with the same
+  `:secret`.
+
   ## Options
 
   - `:root` - (required) the root directory for file storage
   - `:base_url` - (required for `url/2`) the base URL for serving files
-  - `:secret` - secret key for generating signed URLs. When set, `url/2`
-    returns URLs with HMAC tokens that the `AshStorage.Plug.DiskServe`
-    plug will verify before serving files.
+  - `:secret` - the secret for signing URLs: a binary, a list of binaries
+    (signs with the first, for rotation), or a zero-arity function or
+    `{module, function, args}` that returns one and is called on every
+    `url/2`. When set, `url/2` returns signed URLs that
+    `AshStorage.Plug.DiskServe` verifies. See [Signed URLs](serving.md#signed-urls).
   - `:expires_in` - default expiration for signed URLs in seconds (default: 3600)
   - `:owner_only` - when `true` (the default), files are written with mode
     `0600` and directories are created with mode `0700`. Set it to `false` to
@@ -149,12 +164,25 @@ defmodule AshStorage.Service.Disk do
   # sobelow_skip ["Traversal.FileModule"]
   @impl true
   def stream_download(key, %AshStorage.Service.Context{} = ctx) do
-    root = Keyword.fetch!(ctx.service_opts, :root)
     chunk_size = Keyword.get(ctx.service_opts, :chunk_size, @default_chunk_size)
+
+    with {:ok, path} <- file_path(key, ctx) do
+      {:ok, File.stream!(path, chunk_size)}
+    end
+  end
+
+  # The only place that turns a key into a path that may be read, shared with
+  # `AshStorage.Plug.DiskServe` so that the plug serves exactly what the service would read.
+  # sobelow_skip ["Traversal.FileModule"]
+  @doc false
+  @spec file_path(AshStorage.Service.key(), AshStorage.Service.Context.t()) ::
+          {:ok, Path.t()} | {:error, :not_found | :einval | :eisdir | File.posix()}
+  def file_path(key, %AshStorage.Service.Context{} = ctx) do
+    root = Keyword.fetch!(ctx.service_opts, :root)
 
     with {:ok, safe_path} <- safe_file_path(root, key),
          {:ok, %File.Stat{type: :regular}} <- File.stat(safe_path) do
-      {:ok, File.stream!(safe_path, chunk_size)}
+      {:ok, safe_path}
     else
       {:ok, %File.Stat{}} ->
         {:error, :eisdir}
@@ -214,29 +242,29 @@ defmodule AshStorage.Service.Disk do
   def url(key, %AshStorage.Service.Context{} = ctx) do
     opts = ctx.service_opts
     base_url = Keyword.fetch!(opts, :base_url)
-
-    path =
-      case Keyword.get(opts, :original_filename) do
-        nil -> key
-        filename -> "#{key}/#{URI.encode(filename, &URI.char_unreserved?/1)}"
-      end
-
-    plain_url = "#{base_url}/#{path}"
+    plain_url = "#{base_url}/#{key}"
+    filename = present(Keyword.get(opts, :filename)) || present(ctx.filename)
 
     case Keyword.get(opts, :secret) do
       nil ->
-        plain_url
+        # A query parameter, not a path segment: a segment after the key could
+        # not be told apart from a key that contains `/`.
+        if filename,
+          do: plain_url <> "?" <> URI.encode_query([{"filename", filename}]),
+          else: plain_url
 
       secret ->
-        sign_opts =
-          []
-          |> maybe_put(:expires_in, Keyword.get(opts, :expires_in))
-          |> maybe_put(:disposition, Keyword.get(opts, :disposition))
-          |> maybe_put(:filename, Keyword.get(opts, :filename))
-
-        AshStorage.Token.signed_url(plain_url, secret, key, sign_opts)
+        AshStorage.Token.signed_url(plain_url, secret, key,
+          expires_in: Keyword.get(opts, :expires_in),
+          disposition: Keyword.get(opts, :disposition),
+          filename: filename,
+          content_type: present(Keyword.get(opts, :content_type)) || present(ctx.content_type)
+        )
     end
   end
+
+  defp present(""), do: nil
+  defp present(value), do: value
 
   @impl true
   def direct_upload(key, %AshStorage.Service.Context{} = ctx) do
@@ -252,9 +280,6 @@ defmodule AshStorage.Service.Disk do
        }
      }}
   end
-
-  defp maybe_put(keyword, _key, nil), do: keyword
-  defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)
 
   defp verify_md5(_data, nil), do: :ok
 
