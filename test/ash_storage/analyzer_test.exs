@@ -155,6 +155,24 @@ defmodule AshStorage.AnalyzerTest do
   end
 
   describe "write_attributes" do
+    test "a file argument on a create records the new record as the write target" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_write_target_test.txt")
+      File.write!(path, "one\ntwo")
+      upload = %Plug.Upload{path: path, filename: "doc.txt", content_type: "text/plain"}
+
+      post =
+        Ash.create!(AshStorage.Test.MatrixPost, %{slug: "write-target", doc: upload},
+          action: :create_with_doc
+        )
+
+      entry = post.__metadata__[:doc_blob].analyzers[to_string(AshStorage.Test.TestAnalyzer)]
+
+      assert entry["write_target"]["id"] == post.id
+      assert post.lines == 2
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_write_target_test.txt"))
+    end
+
     test "writes analyzer results to parent record attributes" do
       post = create_post!()
 

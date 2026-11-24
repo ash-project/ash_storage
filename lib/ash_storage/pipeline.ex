@@ -6,7 +6,7 @@ defmodule AshStorage.Pipeline do
   require Ash.Query
 
   alias AshStorage.Info
-  alias AshStorage.Pipeline.{Owner, Purge, Scope, Source, Target}
+  alias AshStorage.Pipeline.{Analysis, Owner, Purge, Scope, Source, Target}
   alias AshStorage.Service.Context
 
   @doc "Resolves an attachment of `resource` by name."
@@ -75,6 +75,20 @@ defmodule AshStorage.Pipeline do
          {:ok, blob} <-
            Ash.create(target.blob_resource, attrs, Scope.to_opts(scope, action: :create)) do
       {:ok, blob, :stored}
+    end
+  end
+
+  @doc """
+  Records the target's analyzers on `blob` and runs the eager ones on
+  `source`. Returns the host attributes their `write_attributes` map to, for
+  the host action to write. `record` is the host record as the action sees
+  it before its write, so on a create its key is not known yet.
+  """
+  @spec analyze(struct(), Source.t(), Target.t(), Scope.t(), struct()) ::
+          {:ok, struct(), map()} | {:error, term()}
+  def analyze(blob, %Source{} = source, %Target{} = target, %Scope{} = scope, record) do
+    with {:ok, blob} <- Analysis.init(blob, target, scope, record) do
+      Analysis.run_eager(blob, source, target, scope)
     end
   end
 

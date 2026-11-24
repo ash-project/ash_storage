@@ -17,7 +17,6 @@ defmodule AshStorage.AttachMatrixPgTest do
   # Cells that fail today, with the issue that explains them. A listed cell
   # fails the suite once it passes.
   @gaps %{
-    {:file_argument, :oban_analyzer} => "#76",
     {:direct_upload, :oban_analyzer} => "#76",
     {:file_argument, :oban_variant} => "#76",
     {:direct_upload, :oban_variant} => "#76",
