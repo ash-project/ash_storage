@@ -422,5 +422,102 @@ whose change tuple names a wrong attachment or argument, or an argument that
 is only set programmatically and not declared on the action, now gets the
 warning.
 
-What to do: rename such a local function. The module tuples keep working, but
-the guides now use the builtins.
+What to do: rename such a local function. Of the module tuples, only
+`{AshStorage.Changes.AttachBlob, argument: ..., attachment: ...}` keeps
+working; the two for file arguments are removed, see the next section.
+
+## `attach_file/2` replaces `HandleFileArgument` and `AttachFile`
+
+What changed: `AshStorage.Changes.HandleFileArgument` and
+`AshStorage.Changes.AttachFile` are removed. A resource that still names one of
+them in a `change` compiles with a warning that names the action and the
+replacement, and the action raises an `UndefinedFunctionError`, wrapped in an
+Ash error, every time it is called, whether a file is passed or not. Search
+your code for both module names.
+`change attach_file(:cover_image)` is the one way to attach a file from an
+action argument; see `AshStorage.Changes.Builtins.attach_file/2`.
+
+For `HandleFileArgument`, replace the tuple and nothing else:
+
+```elixir
+# before
+change {AshStorage.Changes.HandleFileArgument,
+        argument: :cover_image, attachment: :cover_image}
+
+# after
+change attach_file(:cover_image)
+```
+
+For `AttachFile`, replace the tuple the same way, and read on. `AttachFile`
+attached the file by running the generated `attach_<name>` update action on
+the record once the action had saved it. `attach_file/2` attaches inside the
+action it is used in, and no second action runs. So these stop applying to a
+file argument:
+
+1. policies that match the attach action, by its name or by the action type
+   `:update`;
+2. changes and validations the resource declares for update actions;
+3. notifiers and pub-sub messages for that update;
+4. the update timestamp: `updated_at` was bumped right after a create;
+5. extensions that record updates, such as audit logs.
+
+Also:
+
+- the result now carries `<name>_blob` and `<name>_attachment` metadata;
+- an update action with `attach_file/2` needs `require_atomic? false`;
+- eager analyzers run before the record is written, and their
+  `write_attributes` are part of that write, so a failing upload fails the
+  action before anything is saved.
+
+Who this affects: every resource that uses either module.
+
+What to do: replace the tuple with `attach_file/2`. If you relied on one of
+the five points above, there are two ways out.
+
+- Move the rule to the action that takes the file: a policy on that action,
+  or a change with `where: [present(:cover_image)]`.
+- Keep the second action: call `AshStorage.Operations.attach/4` from an
+  `after_action` hook. It runs the generated `attach_<name>` action with
+  everything it carries:
+
+```elixir
+create :create do
+  accept [:title]
+  argument :cover_image, :file, allow_nil?: true
+
+  change fn changeset, context ->
+    Ash.Changeset.after_action(changeset, fn changeset, record ->
+      case Ash.Changeset.get_argument(changeset, :cover_image) do
+        nil ->
+          {:ok, record}
+
+        file ->
+          filename =
+            case Ash.Type.File.filename(file) do
+              {:ok, filename} -> filename
+              _ -> "upload"
+            end
+
+          content_type =
+            case Ash.Type.File.content_type(file) do
+              {:ok, content_type} -> content_type
+              _ -> "application/octet-stream"
+            end
+
+          opts =
+            Ash.Context.to_opts(context, filename: filename, content_type: content_type)
+
+          with {:ok, %{record: record}} <-
+                 AshStorage.Operations.attach(record, :cover_image, file, opts) do
+            {:ok, record}
+          end
+      end
+    end)
+  end
+end
+```
+
+The hook returns the record from the attach result, so the analyzers'
+`write_attributes` are on what the caller gets back. The attach runs inside
+the outer action's transaction, so a file it replaces is deleted before that
+transaction commits.

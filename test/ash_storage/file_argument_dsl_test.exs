@@ -82,11 +82,11 @@ defmodule AshStorage.FileArgumentDslTest do
     end
 
     test "requires the argument and the attachment" do
-      assert {:error, _} = AshStorage.Changes.HandleFileArgument.init(attachment: :document)
-      assert {:error, _} = AshStorage.Changes.HandleFileArgument.init(argument: :document_file)
+      assert {:error, _} = AshStorage.Changes.AttachFileArgument.init(attachment: :document)
+      assert {:error, _} = AshStorage.Changes.AttachFileArgument.init(argument: :document_file)
 
       assert {:ok, _} =
-               AshStorage.Changes.HandleFileArgument.init(
+               AshStorage.Changes.AttachFileArgument.init(
                  argument: :document_file,
                  attachment: :document
                )

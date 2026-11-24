@@ -50,7 +50,7 @@ defmodule AshStorage.ChecksumVerificationTest do
     end
   end
 
-  describe "AttachFile threads expected_md5 to the service" do
+  describe "attach_file/2 threads expected_md5 to the service" do
     test "create_with_image succeeds against a verifying service" do
       path = Path.join(System.tmp_dir!(), "checksum_attach_file.txt")
       File.write!(path, "from disk")

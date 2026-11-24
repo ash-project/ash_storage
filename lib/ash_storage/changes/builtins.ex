@@ -58,7 +58,7 @@ defmodule AshStorage.Changes.Builtins do
   """
   @spec attach_file(attachment :: atom(), opts :: keyword()) :: {module(), keyword()}
   def attach_file(attachment, opts \\ []) do
-    {AshStorage.Changes.HandleFileArgument, build(:attach_file, attachment, opts)}
+    {AshStorage.Changes.AttachFileArgument, build(:attach_file, attachment, opts)}
   end
 
   @doc """

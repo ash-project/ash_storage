@@ -33,13 +33,14 @@ defmodule AshStorage.Test.ExtraAttrsPost do
       accept [:title]
       argument :cover_image, :file, allow_nil?: true
 
-      change {AshStorage.Changes.AttachFile, argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
 
     update :update_cover_image do
+      require_atomic? false
       argument :cover_image, :file, allow_nil?: true
 
-      change {AshStorage.Changes.AttachFile, argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
   end
 end

@@ -106,8 +106,6 @@ defmodule AshStorage.MixProject do
         ],
         Changes: [
           AshStorage.Changes.Builtins,
-          AshStorage.Changes.HandleFileArgument,
-          AshStorage.Changes.AttachFile,
           AshStorage.Changes.AttachBlob
         ],
         Services: [

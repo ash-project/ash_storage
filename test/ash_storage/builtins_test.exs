@@ -66,10 +66,10 @@ defmodule AshStorage.BuiltinsTest do
   describe "attach_file/2 and attach_blob/2" do
     test "build the change, with the argument defaulting to the attachment's name" do
       assert Builtins.attach_file(:cover) ==
-               {AshStorage.Changes.HandleFileArgument, argument: :cover, attachment: :cover}
+               {AshStorage.Changes.AttachFileArgument, argument: :cover, attachment: :cover}
 
       assert Builtins.attach_file(:cover, argument: :upload) ==
-               {AshStorage.Changes.HandleFileArgument, argument: :upload, attachment: :cover}
+               {AshStorage.Changes.AttachFileArgument, argument: :upload, attachment: :cover}
 
       assert Builtins.attach_blob(:cover) ==
                {AshStorage.Changes.AttachBlob, argument: :cover, attachment: :cover}
@@ -137,6 +137,45 @@ defmodule AshStorage.BuiltinsTest do
       assert error.message =~ ":create"
     end
 
+    test "names the replacement of a removed file-argument change" do
+      for {name, change} <- [
+            removed_tuple:
+              "change {AshStorage.Changes.HandleFileArgument, argument: :cover, attachment: :cover}",
+            removed_module: "change AshStorage.Changes.AttachFile"
+          ] do
+        error = verify_error(name, change, "argument :cover, :file")
+
+        assert error.path == [:actions, :create]
+        assert error.message =~ "was removed"
+        assert error.message =~ "attach_file/2"
+      end
+
+      refute Code.ensure_loaded?(AshStorage.Changes.HandleFileArgument)
+      refute Code.ensure_loaded?(AshStorage.Changes.AttachFile)
+    end
+
+    test "passes actions whose validations sit next to an attach change" do
+      module =
+        compile_post(:validated, """
+        create :create do
+          accept [:title]
+          argument :cover, :file, allow_nil?: true
+          validate present(:title)
+          change attach_file(:cover)
+        end
+
+        update :update do
+          require_atomic? false
+          accept [:title]
+          argument :cover, :file, allow_nil?: true
+          validate present(:title)
+          change attach_file(:cover)
+        end
+        """)
+
+      assert :ok = ValidateAttachChanges.verify(module.spark_dsl_config())
+    end
+
     test "rejects an argument the action does not have" do
       error = verify_error(:missing_argument, "change attach_file(:cover)", "")
 
@@ -150,6 +189,21 @@ defmodule AshStorage.BuiltinsTest do
   # the module is compiled, so the output is captured here and the verifier is
   # called directly.
   defp verify_error(name, change, argument) do
+    module =
+      compile_post(name, """
+      create :create do
+        #{argument}
+        #{change}
+      end
+      """)
+
+    assert {:error, %Spark.Error.DslError{} = error} =
+             ValidateAttachChanges.verify(module.spark_dsl_config())
+
+    error
+  end
+
+  defp compile_post(name, actions) do
     module = Module.concat(__MODULE__, Macro.camelize("#{name}_post"))
 
     capture_io(:stderr, fn ->
@@ -170,21 +224,16 @@ defmodule AshStorage.BuiltinsTest do
 
         attributes do
           uuid_primary_key :id
+          attribute :title, :string, public?: true
         end
 
         actions do
-          create :create do
-            #{argument}
-            #{change}
-          end
+          #{actions}
         end
       end
       """)
     end)
 
-    assert {:error, %Spark.Error.DslError{} = error} =
-             ValidateAttachChanges.verify(module.spark_dsl_config())
-
-    error
+    module
   end
 end

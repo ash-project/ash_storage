@@ -86,29 +86,6 @@ When the source doesn't provide a value, the defaults are `"upload"` for filenam
 
 > **Note:** Full filename/content_type extraction requires Ash version with the `Ash.Type.File.filename/1` and `Ash.Type.File.content_type/1` callbacks. On older Ash versions, the defaults are used. This is handled gracefully at runtime.
 
-## Alternative: `AshStorage.Changes.AttachFile`
-
-There is also a simpler `AttachFile` change that calls `AshStorage.Operations.attach/4` in an `after_action` hook:
-
-```elixir
-create :create do
-  argument :cover_image, :file, allow_nil?: true
-
-  change {AshStorage.Changes.AttachFile,
-          argument: :cover_image, attachment: :cover_image}
-end
-```
-
-The difference from `attach_file/2`:
-
-| | `attach_file/2` | `AttachFile` |
-|---|---|---|
-| `write_attributes` | Supported (applied in before_action) | Not supported |
-| Eager analyzers | Run in before_action, attributes set atomically | Run via `Operations.attach` after record is saved |
-| Argument type | `Ash.Type.File` | `:file` |
-
-Use `attach_file/2` when you need `write_attributes` or want the tightest integration. Use `AttachFile` for simpler cases.
-
 ## Direct uploads with `Operations.attach/4`
 
 When you don't want to wire a file argument into an Ash action — typical in a Phoenix controller that handles the upload imperatively — call `AshStorage.Operations.attach/4` directly. The `io` argument accepts the same shapes as the file-argument path, including `%Plug.Upload{}`:

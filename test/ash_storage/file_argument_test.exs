@@ -1,6 +1,100 @@
 defmodule AshStorage.FileArgumentTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  defmodule Notifier do
+    @moduledoc false
+    use Ash.Notifier
+
+    @impl true
+    def notify(%Ash.Notifier.Notification{action: action}) do
+      send(self(), {:notified, action.name})
+      :ok
+    end
+  end
+
+  defmodule Domain do
+    @moduledoc false
+    use Ash.Domain, validate_config_inclusion?: false
+
+    resources do
+      allow_unregistered? true
+    end
+  end
+
+  defmodule NestedAttachPost do
+    @moduledoc false
+    # Attaches the file argument by running the generated `attach_cover_image`
+    # action from an `after_action` hook, as the "Migrating to 1.0" guide shows
+    use Ash.Resource,
+      domain: AshStorage.FileArgumentTest.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [AshStorage],
+      simple_notifiers: [AshStorage.FileArgumentTest.Notifier]
+
+    ets do
+      private? true
+    end
+
+    storage do
+      service({AshStorage.Service.Test, []})
+      blob_resource(AshStorage.Test.Blob)
+      attachment_resource(AshStorage.Test.PolymorphicAttachment)
+
+      has_one_attached :cover_image do
+        analyzer(AshStorage.Test.TestAnalyzer, write_attributes: [line_count: :lines])
+      end
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :title, :string, public?: true
+      attribute :lines, :integer, public?: true
+      create_timestamp :inserted_at
+      update_timestamp :updated_at
+    end
+
+    actions do
+      defaults [:read]
+
+      create :create do
+        accept [:title]
+        argument :cover_image, :file, allow_nil?: true
+
+        change fn changeset, context ->
+          Ash.Changeset.after_action(changeset, fn changeset, record ->
+            case Ash.Changeset.get_argument(changeset, :cover_image) do
+              nil ->
+                {:ok, record}
+
+              file ->
+                filename =
+                  case Ash.Type.File.filename(file) do
+                    {:ok, filename} -> filename
+                    _ -> "upload"
+                  end
+
+                content_type =
+                  case Ash.Type.File.content_type(file) do
+                    {:ok, content_type} -> content_type
+                    _ -> "application/octet-stream"
+                  end
+
+                opts =
+                  Ash.Context.to_opts(context, filename: filename, content_type: content_type)
+
+                with {:ok, %{record: record}} <-
+                       AshStorage.Operations.attach(record, :cover_image, file, opts) do
+                  {:ok, record}
+                end
+            end
+          end)
+        end
+      end
+    end
+  end
+
   setup do
     AshStorage.Service.Test.reset!()
     :ok
@@ -29,6 +123,24 @@ defmodule AshStorage.FileArgumentTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_create_test.txt"))
     end
 
+    test "puts the blob and the attachment on the result" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_create_metadata_test.txt")
+      File.write!(path, "metadata")
+
+      post =
+        AshStorage.Test.Post
+        |> Ash.Changeset.for_create(:create_with_image, %{
+          title: "with metadata",
+          cover_image: Ash.Type.File.from_path(path)
+        })
+        |> Ash.create!()
+
+      assert %{id: blob_id} = post.__metadata__[:cover_image_blob]
+      assert post.__metadata__[:cover_image_attachment].blob_id == blob_id
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_create_metadata_test.txt"))
+    end
+
     test "skips attach when argument is nil" do
       post =
         AshStorage.Test.Post
@@ -39,7 +151,7 @@ defmodule AshStorage.FileArgumentTest do
       assert post.cover_image == nil
     end
 
-    test "forwards action opts to the nested attach operation" do
+    test "the actor reaches the service" do
       path = Path.join(System.tmp_dir!(), "ash_storage_actor_opts_test.txt")
       File.write!(path, "actor opts")
 
@@ -62,7 +174,7 @@ defmodule AshStorage.FileArgumentTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_actor_opts_test.txt"))
     end
 
-    test "forwards action opts to nested attach operations during bulk create" do
+    test "the actor reaches the service during bulk create" do
       path1 = Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_1.txt")
       path2 = Path.join(System.tmp_dir!(), "ash_storage_bulk_actor_opts_2.txt")
 
@@ -208,6 +320,33 @@ defmodule AshStorage.FileArgumentTest do
       assert post.cover_image_url =~ "http://test.local/storage/"
     after
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_url_test.png"))
+    end
+  end
+
+  describe "attaching through the generated action from an after_action hook" do
+    test "runs that action and returns its record" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_nested_attach.txt")
+      File.write!(path, "one\ntwo")
+      upload = %Plug.Upload{path: path, filename: "nested.txt", content_type: "text/plain"}
+
+      log =
+        capture_log(fn ->
+          post =
+            Ash.create!(NestedAttachPost, %{title: "nested", cover_image: upload},
+              action: :create
+            )
+
+          send(self(), {:post, post})
+        end)
+
+      assert_received {:post, post}
+      assert log == ""
+      assert Ash.load!(post, cover_image: :blob).cover_image.blob.filename == "nested.txt"
+      assert_received {:notified, :attach_cover_image}
+      assert DateTime.compare(post.updated_at, post.inserted_at) == :gt
+      assert post.lines == 2
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_nested_attach.txt"))
     end
   end
 end

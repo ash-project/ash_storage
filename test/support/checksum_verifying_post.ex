@@ -33,7 +33,7 @@ defmodule AshStorage.Test.ChecksumVerifyingPost do
       accept [:title]
       argument :cover_image, :file, allow_nil?: true
 
-      change {AshStorage.Changes.AttachFile, argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
   end
 end
