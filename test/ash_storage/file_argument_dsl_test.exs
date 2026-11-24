@@ -61,4 +61,35 @@ defmodule AshStorage.FileArgumentDslTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_file_arg_analyze.txt"))
     end
   end
+
+  describe "the change" do
+    test "puts the blob and the attachment on the result" do
+      path = Path.join(System.tmp_dir!(), "ash_storage_file_arg_metadata.txt")
+      File.write!(path, "hello")
+
+      post =
+        AshStorage.Test.AnalyzablePost
+        |> Ash.Changeset.for_create(:create_with_doc, %{
+          title: "metadata",
+          document_file: Ash.Type.File.from_path(path)
+        })
+        |> Ash.create!()
+
+      assert %{id: blob_id} = post.__metadata__[:document_blob]
+      assert post.__metadata__[:document_attachment].blob_id == blob_id
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_file_arg_metadata.txt"))
+    end
+
+    test "requires the argument and the attachment" do
+      assert {:error, _} = AshStorage.Changes.HandleFileArgument.init(attachment: :document)
+      assert {:error, _} = AshStorage.Changes.HandleFileArgument.init(argument: :document_file)
+
+      assert {:ok, _} =
+               AshStorage.Changes.HandleFileArgument.init(
+                 argument: :document_file,
+                 attachment: :document
+               )
+    end
+  end
 end

@@ -308,3 +308,24 @@ the file is still deleted before the action returns.
 What to do: nothing, for most applications. Watch the logs for the warning if
 you need to know about objects left behind. An application that attaches one
 blob to several records should know that purging one of them keeps the file.
+
+## File arguments run the whole attachment declaration
+
+What changed: the change that attaches a file from an action argument runs
+the same steps as the generated `attach_<name>` action. A file attached
+through a file argument now gets the attachment's eager variants, has its `generate: :oban` variants
+recorded and enqueued, and sets `pending_analyzers` for `analyze: :oban`
+analyzers, so their job runs instead of being cancelled. An existing
+`has_one_attached` file is replaced on create actions too, not only on
+updates.
+
+Who this affects: attachments with variants or `analyze: :oban` analyzers that
+are written through a file argument. They start getting them; blobs attached
+before the upgrade are not back-filled. Upsert actions with a file argument:
+each call used to add an attachment row next to the existing one, and now
+replaces it. Duplicate rows left by earlier upserts stay until the next
+replacement, which removes them.
+
+What to do: nothing. To back-fill variants or background analysis for files
+attached before the upgrade, attach them again, or generate the variants and
+run the analyzers yourself.

@@ -18,9 +18,7 @@ defmodule AshStorage.AttachMatrixPgTest do
   # fails the suite once it passes.
   @gaps %{
     {:direct_upload, :oban_analyzer} => "#76",
-    {:file_argument, :oban_variant} => "#76",
     {:direct_upload, :oban_variant} => "#76",
-    {:file_argument, :failed_variant_keeps_old_file} => "#76",
     {:direct_upload, :failed_variant_keeps_old_file} => "#76",
     {:action, :rollback_keeps_old_file} => "#66",
     {:file_argument, :rollback_keeps_old_file} => "#66",
