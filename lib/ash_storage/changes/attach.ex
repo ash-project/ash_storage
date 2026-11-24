@@ -3,8 +3,7 @@ defmodule AshStorage.Changes.Attach do
   use Ash.Resource.Change
 
   alias AshStorage.Pipeline
-  alias AshStorage.Pipeline.{Hooks, Owner, Scope, Target}
-  alias AshStorage.Service.Context
+  alias AshStorage.Pipeline.{Hooks, Owner, Scope, Source, Target}
 
   @impl true
   def init(opts) do
@@ -74,17 +73,10 @@ defmodule AshStorage.Changes.Attach do
     metadata = Ash.Changeset.get_argument(changeset, :metadata) || %{}
 
     with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
-         {:ok, {service_mod, ctx}} <- Target.service_context(target, scope),
-         {:ok, key} <- AshStorage.resolve_key(target.attachment, ctx, changeset),
-         {:ok, blob} <-
-           upload_and_create_blob(target, service_mod, ctx, io, scope,
-             key: key,
-             filename: filename,
-             content_type: content_type,
-             metadata: metadata
-           ),
-         {:ok, blob, attrs_to_write} <-
-           run_analyzers(blob, target, record, io, scope) do
+         source =
+           Source.new(io, filename: filename, content_type: content_type, metadata: metadata),
+         {:ok, blob, :stored} <- Pipeline.store(source, target, scope, changeset),
+         {:ok, blob, attrs_to_write} <- run_analyzers(blob, target, record, source, scope) do
       {:ok, attrs_to_write,
        %{
          blob: blob,
@@ -102,7 +94,7 @@ defmodule AshStorage.Changes.Attach do
     end)
   end
 
-  defp run_analyzers(blob, target, record, io, scope) do
+  defp run_analyzers(blob, target, record, source, scope) do
     analyzer_defs = target.attachment.analyzers || []
 
     if analyzer_defs == [] do
@@ -156,17 +148,15 @@ defmodule AshStorage.Changes.Attach do
             analyze != :oban && module.accept?(content_type)
           end)
 
-        run_eager_analyzers(blob, eager, io, scope)
+        run_eager_analyzers(blob, eager, source, scope)
       end
     end
   end
 
-  defp run_eager_analyzers(blob, [], _io, _scope), do: {:ok, blob, %{}}
+  defp run_eager_analyzers(blob, [], _source, _scope), do: {:ok, blob, %{}}
 
-  defp run_eager_analyzers(blob, eager_analyzers, io, scope) do
-    {:ok, path} = resolve_analyzer_path(io)
-
-    try do
+  defp run_eager_analyzers(blob, eager_analyzers, source, scope) do
+    Source.with_local_path(source, fn path ->
       Enum.reduce_while(eager_analyzers, {:ok, blob, %{}}, fn {module, _analyze, opts,
                                                                write_attributes},
                                                               {:ok, blob, acc_writes} ->
@@ -203,138 +193,11 @@ defmodule AshStorage.Changes.Attach do
           {:error, error} -> {:halt, {:error, error}}
         end
       end)
-    after
-      maybe_cleanup_tempfile(io, path)
-    end
+    end)
   end
 
   defp maybe_put_tenant(map, nil), do: map
   defp maybe_put_tenant(map, tenant), do: Map.put(map, "tenant", tenant)
-
-  # sobelow_skip ["Crypto.WeakHash"]
-  defp upload_and_create_blob(target, service_mod, ctx, io, scope, opts) do
-    filename = Keyword.fetch!(opts, :filename)
-    content_type = Keyword.get(opts, :content_type, "application/octet-stream")
-    metadata = Keyword.get(opts, :metadata, %{})
-
-    data = read_io(io)
-    key = Keyword.fetch!(opts, :key)
-    checksum = :crypto.hash(:md5, data) |> Base.encode64()
-    byte_size = byte_size(data)
-
-    # Make the upload metadata visible to the service so it can record it
-    # on the underlying object — e.g. the S3 service forwards
-    # `:content_type` as the `Content-Type` header on PUT. Without this
-    # step the service would only know the bytes and the key, not what
-    # those bytes are. The blob row still receives the values via
-    # `blob_attrs` below; this just mirrors them onto the context.
-    ctx =
-      ctx
-      |> Context.put_expected_md5(checksum)
-      |> Context.put_blob_metadata(content_type: content_type, filename: filename)
-
-    with {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, data, ctx)) do
-      blob_attrs =
-        %{
-          key: key,
-          filename: filename,
-          content_type: content_type,
-          byte_size: byte_size,
-          checksum: checksum,
-          service_name: service_mod,
-          service_opts: Target.persistable_service_opts(service_mod, ctx.service_opts),
-          metadata: metadata
-        }
-        |> Map.merge(extra_blob_attrs)
-
-      Ash.create(target.blob_resource, blob_attrs, Scope.to_opts(scope, action: :create))
-    end
-  end
-
-  defp normalize_upload(:ok), do: {:ok, %{}}
-  defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
-  defp normalize_upload({:error, _} = error), do: error
-
-  # -- IO helpers --
-  #
-  # Materialize the caller-supplied `io` value into the raw bytes that will
-  # be uploaded. Accepted shapes:
-  #
-  #   * `%Ash.Type.File{}` — opened and read in binary mode.
-  #   * `%File.Stream{}`   — collected into a single binary.
-  #   * `%Plug.Upload{}`   — read from disk via `File.read!/1`. Without
-  #     this clause the struct's `:path` field (a string) would match
-  #     the generic `is_binary/1` clause below and the *path* would be
-  #     uploaded as the body. See documentation/topics/file-arguments.md
-  #     for usage from Phoenix controllers.
-  #   * binary             — used verbatim as the bytes to store. Note
-  #     that this is the *bytes*, not a filesystem path.
-  #   * iodata list        — flattened into a binary.
-
-  defp read_io(%Ash.Type.File{} = file) do
-    {:ok, device} = Ash.Type.File.open(file, [:read, :binary])
-    data = IO.binread(device, :eof)
-    File.close(device)
-    data
-  end
-
-  defp read_io(%File.Stream{} = stream), do: Enum.into(stream, <<>>, &IO.iodata_to_binary/1)
-
-  # Matched by `__struct__` atom so this module does not require `:plug`
-  # as a compile-time dependency; `Plug.Upload` is only resolved here as
-  # an atom literal.
-  #
-  # sobelow_skip ["Traversal.FileModule"]
-  defp read_io(%{__struct__: Plug.Upload, path: path}) when is_binary(path),
-    do: File.read!(path)
-
-  defp read_io(data) when is_binary(data), do: data
-  defp read_io(data) when is_list(data), do: IO.iodata_to_binary(data)
-
-  # -- Analyzer IO helpers --
-
-  defp resolve_analyzer_path(%Ash.Type.File{} = file) do
-    case Ash.Type.File.path(file) do
-      {:ok, path} -> {:ok, path}
-      _ -> write_tempfile(file)
-    end
-  end
-
-  defp resolve_analyzer_path(%File.Stream{path: path}), do: {:ok, path}
-
-  defp resolve_analyzer_path(data) when is_binary(data) or is_list(data) do
-    write_tempfile(data)
-  end
-
-  defp write_tempfile(%Ash.Type.File{} = file) do
-    {:ok, device} = Ash.Type.File.open(file, [:read, :binary])
-    data = IO.binread(device, :eof)
-    File.close(device)
-    write_tempfile(data)
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp write_tempfile(data) when is_binary(data) do
-    path = Path.join(System.tmp_dir!(), "ash_storage_analyze_#{AshStorage.generate_key()}")
-    File.write!(path, data)
-    {:ok, path}
-  end
-
-  defp write_tempfile(data) when is_list(data) do
-    write_tempfile(IO.iodata_to_binary(data))
-  end
-
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(%Ash.Type.File{} = file, path) do
-    case Ash.Type.File.path(file) do
-      {:ok, ^path} -> :ok
-      _ -> File.rm(path)
-    end
-  end
-
-  defp maybe_cleanup_tempfile(%File.Stream{}, _path), do: :ok
-  # sobelow_skip ["Traversal.FileModule"]
-  defp maybe_cleanup_tempfile(_data, path), do: File.rm(path)
 
   # -- Attachment helpers --
 

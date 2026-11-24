@@ -108,6 +108,24 @@ defmodule AshStorage.AnalyzerTest do
       File.rm(Path.join(System.tmp_dir!(), "ash_storage_analyzer_test.txt"))
     end
 
+    test "works with a %Plug.Upload{} input" do
+      post = create_post!()
+      path = Path.join(System.tmp_dir!(), "ash_storage_analyzer_upload_test.txt")
+      File.write!(path, "line one\nline two\n")
+
+      upload = %Plug.Upload{path: path, filename: "test.txt", content_type: "text/plain"}
+
+      assert {:ok, %{blob: blob}} =
+               Operations.attach(post, :document, upload,
+                 filename: "test.txt",
+                 content_type: "text/plain"
+               )
+
+      assert blob.metadata["line_count"] == 3
+    after
+      File.rm(Path.join(System.tmp_dir!(), "ash_storage_analyzer_upload_test.txt"))
+    end
+
     test "preserves user-provided metadata alongside analyzer results" do
       post = create_post!()
 

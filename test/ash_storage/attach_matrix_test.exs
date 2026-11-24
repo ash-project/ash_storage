@@ -37,7 +37,6 @@ defmodule AshStorage.AttachMatrixTest do
     {:direct_upload, :scoped_eager_variant} => "#76",
     {:file_argument, :failed_variant_keeps_old_file} => "#76",
     {:direct_upload, :failed_variant_keeps_old_file} => "#76",
-    {:action, :raw_plug_upload} => "#103",
     {:direct_upload, :refuses_unattachable_blob} => "#67",
     {:direct_upload, :refuses_foreign_blob} => "#67"
   }

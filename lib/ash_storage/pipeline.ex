@@ -6,7 +6,8 @@ defmodule AshStorage.Pipeline do
   require Ash.Query
 
   alias AshStorage.Info
-  alias AshStorage.Pipeline.{Owner, Purge, Scope, Target}
+  alias AshStorage.Pipeline.{Owner, Purge, Scope, Source, Target}
+  alias AshStorage.Service.Context
 
   @doc "Resolves an attachment of `resource` by name."
   @spec resolve(Ash.Resource.t(), atom()) ::
@@ -36,6 +37,50 @@ defmodule AshStorage.Pipeline do
         {:error, {:unknown_attachment, attachment_name}}
     end
   end
+
+  @doc """
+  Uploads `source` under the target's attachment and creates its blob row.
+  The key comes from the attachment's `path`, called with `changeset`; an
+  invalid key fails before anything is uploaded.
+  """
+  @spec store(Source.t(), Target.t(), Scope.t(), Ash.Changeset.t() | nil) ::
+          {:ok, struct(), :stored} | {:error, term()}
+  def store(%Source{} = source, %Target{} = target, %Scope{} = scope, changeset) do
+    with {:ok, {service_mod, ctx}} <- Target.service_context(target, scope),
+         {:ok, key} <- AshStorage.resolve_key(target.attachment, ctx, changeset),
+         # The service sees what the bytes are, so that it can record it on the
+         # object (the S3 service sends the content type as `Content-Type`)
+         ctx =
+           ctx
+           |> Context.put_expected_md5(source.checksum)
+           |> Context.put_blob_metadata(
+             content_type: source.content_type,
+             filename: source.filename
+           ),
+         {:ok, extra_attrs} <- normalize_upload(service_mod.upload(key, source.data, ctx)),
+         attrs =
+           Map.merge(
+             %{
+               key: key,
+               filename: source.filename,
+               content_type: source.content_type,
+               byte_size: source.byte_size,
+               checksum: source.checksum,
+               service_name: service_mod,
+               service_opts: Target.persistable_service_opts(service_mod, ctx.service_opts),
+               metadata: source.metadata
+             },
+             extra_attrs
+           ),
+         {:ok, blob} <-
+           Ash.create(target.blob_resource, attrs, Scope.to_opts(scope, action: :create)) do
+      {:ok, blob, :stored}
+    end
+  end
+
+  defp normalize_upload(:ok), do: {:ok, %{}}
+  defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
+  defp normalize_upload({:error, _} = error), do: error
 
   @doc """
   The attachment rows of `record` under the target's attachment, with their
