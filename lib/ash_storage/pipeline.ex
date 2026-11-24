@@ -97,6 +97,118 @@ defmodule AshStorage.Pipeline do
   defp normalize_upload({:error, _} = error), do: error
 
   @doc """
+  Links `blob` to `record`. A row that already links them is kept, and
+  `kept?` says so. For a `has_one` the other rows are removed through
+  `unlink/4`, and the files they leave behind are returned as deletions. When the action has just
+  created `record`, its analyzers learn the record's key here.
+  """
+  @spec link(struct(), struct(), Target.t(), Scope.t()) ::
+          {:ok,
+           %{
+             attachment: struct(),
+             blob: struct(),
+             deletions: [Purge.deletion()],
+             kept?: boolean()
+           }}
+          | {:error, term()}
+  def link(record, blob, %Target{} = target, %Scope{} = scope) do
+    with {:ok, existing} <- attachments(record, target, scope, link_filters(target, blob)),
+         {linked, others} = Enum.split_with(existing, &(&1.blob_id == blob.id)),
+         {:ok, deletions} <- replace(others, target, scope),
+         {:ok, attachment} <- keep_or_insert(linked, record, blob, target, scope),
+         {:ok, blob} <- Analysis.bind_write_target(blob, target, record, scope) do
+      {:ok, %{attachment: attachment, blob: blob, deletions: deletions, kept?: linked != []}}
+    end
+  end
+
+  # A has_many replaces nothing, so only a row for this blob matters
+  defp link_filters(%Target{attachment: %{type: :one}}, _blob), do: []
+  defp link_filters(%Target{attachment: %{type: :many}}, blob), do: [blob_id: blob.id]
+
+  defp replace(others, %Target{attachment: %{type: :one}} = target, scope) do
+    with {:ok, %{deletions: deletions}} <- unlink(others, :purge, target, scope) do
+      {:ok, deletions}
+    end
+  end
+
+  defp replace(_others, %Target{attachment: %{type: :many}}, _scope), do: {:ok, []}
+
+  defp keep_or_insert([attachment | _], _record, _blob, _target, _scope), do: {:ok, attachment}
+
+  defp keep_or_insert([], record, blob, target, scope),
+    do: insert_attachment(record, blob, target, scope)
+
+  @doc """
+  Starts what the attachment's variants and background analyzers need:
+  generates the eager variants, records the `generate: :oban` ones as
+  pending, and enqueues the jobs.
+  """
+  @spec derive(struct(), Target.t(), Scope.t()) :: {:ok, struct()} | {:error, term()}
+  def derive(blob, %Target{} = target, %Scope{} = scope) do
+    with :ok <- generate_eager(blob, target, scope),
+         {:ok, blob} <- record_pending_variants(blob, target, scope) do
+      enqueue(blob, target, scope)
+      {:ok, blob}
+    end
+  end
+
+  defp generate_eager(blob, target, scope) do
+    target
+    |> variants(:eager)
+    |> Enum.reduce_while(:ok, fn variant, :ok ->
+      case AshStorage.VariantGenerator.generate(blob, variant, target, scope) do
+        {:ok, _variant_blob} -> {:cont, :ok}
+        {:error, :not_accepted} -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp record_pending_variants(blob, target, scope) do
+    case variants(target, :oban) do
+      [] ->
+        {:ok, blob}
+
+      variants ->
+        pending =
+          Map.new(variants, fn variant ->
+            {module, opts} = AshStorage.VariantDefinition.normalize(variant)
+
+            {to_string(variant.name),
+             %{
+               "status" => "pending",
+               "module" => to_string(module),
+               "opts" => Map.new(opts, fn {k, v} -> {to_string(k), v} end),
+               "resource" => to_string(target.resource),
+               "attachment" => to_string(target.attachment.name)
+             }}
+          end)
+
+        Ash.update(
+          blob,
+          %{
+            metadata: Map.put(blob.metadata || %{}, "__pending_variants__", pending),
+            pending_variants: true
+          },
+          Scope.to_opts(scope, action: :update_metadata)
+        )
+    end
+  end
+
+  defp enqueue(blob, target, scope) do
+    if Enum.any?(target.attachment.analyzers || [], &(&1.analyze == :oban)) do
+      AshOban.run_trigger(blob, :run_pending_analyzers, tenant: scope.tenant)
+    end
+
+    if variants(target, :oban) != [] do
+      AshOban.run_trigger(blob, :run_pending_variants, tenant: scope.tenant)
+    end
+  end
+
+  defp variants(%Target{attachment: attachment}, generate),
+    do: Enum.filter(attachment.variants || [], &(&1.generate == generate))
+
+  @doc """
   The attachment rows of `record` under the target's attachment, with their
   blobs loaded. `filters` narrows them further, for example `blob_id: id`.
   """
