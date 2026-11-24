@@ -20,12 +20,45 @@ defmodule AshStorage.Transformers.SetupStorage do
 
     attachment_resource = Spark.Dsl.Extension.get_opt(dsl_state, [:storage], :attachment_resource)
 
-    dsl_state
-    |> maybe_add_dependent_change(attachments)
-    |> add_relationships(attachments, attachment_resource)
-    |> add_url_calculations(attachments)
-    |> add_attachment_actions(attachments)
+    with {:ok, key} <- record_key(dsl_state, attachments) do
+      dsl_state
+      |> maybe_add_dependent_change(attachments)
+      |> add_relationships(attachments, attachment_resource, key)
+      |> add_url_calculations(attachments)
+      |> add_attachment_actions(attachments)
+    end
   end
+
+  # Attachment rows hold one value that identifies their host record, so a host
+  # needs exactly one primary key attribute
+  defp record_key(_dsl_state, []), do: {:ok, nil}
+
+  defp record_key(dsl_state, _attachments) do
+    case dsl_state
+         |> Spark.Dsl.Extension.get_entities([:attributes])
+         |> Enum.filter(& &1.primary_key?)
+         |> Enum.map(& &1.name) do
+      [key] ->
+        {:ok, key}
+
+      keys ->
+        resource = Spark.Dsl.Extension.get_persisted(dsl_state, :module)
+
+        {:error,
+         Spark.Error.DslError.exception(
+           module: resource,
+           path: [:storage],
+           message: """
+           #{inspect(resource)} declares attachments, and AshStorage identifies the \
+           record an attachment belongs to by a single primary key attribute. \
+           The resource's primary key is #{describe_keys(keys)}.
+           """
+         )}
+    end
+  end
+
+  defp describe_keys([]), do: "empty"
+  defp describe_keys(keys), do: "made of " <> Enum.map_join(keys, ", ", &inspect/1)
 
   defp maybe_add_dependent_change(dsl_state, attachments) do
     has_dependent? =
@@ -45,7 +78,7 @@ defmodule AshStorage.Transformers.SetupStorage do
   end
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp add_relationships({:ok, dsl_state}, attachments, attachment_resource) do
+  defp add_relationships({:ok, dsl_state}, attachments, attachment_resource, key) do
     belongs_to_resources =
       Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
 
@@ -72,6 +105,7 @@ defmodule AshStorage.Transformers.SetupStorage do
 
       opts =
         [
+          source_attribute: key,
           destination_attribute: destination_attribute,
           validate_destination_attribute?: not is_nil(parent_rel),
           filters: relationship_filters(dsl_state, attachment_def, parent_rel),
@@ -95,7 +129,7 @@ defmodule AshStorage.Transformers.SetupStorage do
     end)
   end
 
-  defp add_relationships({:error, error}, _, _), do: {:error, error}
+  defp add_relationships({:error, error}, _, _, _), do: {:error, error}
 
   # A polymorphic attachment resource is shared by every host resource that names
   # it, so its relationship has to match the host's record type as well as the

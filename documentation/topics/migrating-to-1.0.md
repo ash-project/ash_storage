@@ -359,3 +359,40 @@ no longer gets that record.
 What to do: review each attachment used with direct uploads. For large files
 declare `analyze: :oban` on its analyzers and `generate: :oban` on its
 variants, or leave variants on demand.
+
+## Host resources need a single primary key attribute
+
+What changed: attachments find and write their host record by the resource's
+primary key attribute, whatever its name. Before, they always used `:id`. A
+resource that declares attachments and does not have exactly one primary key
+attribute no longer compiles, with a `Spark.Error.DslError` in its `storage`
+section:
+
+```text
+MyApp.Post declares attachments, and AshStorage identifies the record an
+attachment belongs to by a single primary key attribute. The resource's
+primary key is made of :id, :org.
+```
+
+Who this affects:
+
+- Resources with attachments and a composite primary key. If the key included
+  `:id`, records that shared an `:id` also shared their attachments, without
+  any error. Those resources now fail to compile. That includes a key whose
+  `:id` is unique on its own, such as a partitioned table keyed
+  `(id, org_id)`, which worked before.
+- Resources whose single primary key has another name, such as
+  `attribute :slug, :string, primary_key?: true`. With a polymorphic
+  attachment resource they now work; before, they failed to compile with an
+  error about the missing `:id` field. With `belongs_to_resource` on the
+  attachment resource they still do not: the relationship it generates expects
+  `:id` on the host.
+
+What to do: give a resource with attachments a single primary key attribute,
+for example a `uuid_primary_key :id`, and turn the rest of a composite key into
+an identity. When `:id` is unique on its own, as in the partitioned table
+above, declare only `:id` as the Ash primary key (`primary_key?: true`) and
+leave the database's key as it is. If you generate migrations from your
+resources, check the next generated migration before running it: the
+database's key must stay as it is. Attachments written before for a composite key that included
+`:id` are found by that `:id` value, so check whether records shared them.

@@ -1,26 +1,30 @@
 defmodule AshStorage.Pipeline.Owner do
   @moduledoc false
   # How an attachment row points at its host record. A polymorphic attachment
-  # resource stores the record's type and id; one with `belongs_to_resource`
-  # for the host stores the id in that relationship's foreign key. Nothing else
-  # in the pipeline builds either shape.
+  # resource stores the record's type and key; one with `belongs_to_resource`
+  # for the host stores the key in that relationship's foreign key. The key is
+  # the host's primary key attribute; `AshStorage.Transformers.SetupStorage`
+  # makes sure there is exactly one. Nothing else in the pipeline builds
+  # either shape.
 
   alias AshStorage.Pipeline.Target
 
-  defstruct [:record_type, :foreign_key]
+  defstruct [:key, :record_type, :foreign_key]
 
-  @type t :: %__MODULE__{record_type: String.t() | nil, foreign_key: atom() | nil}
+  @type t :: %__MODULE__{key: atom(), record_type: String.t() | nil, foreign_key: atom() | nil}
 
   @doc "How rows of `attachment_resource` identify a record of `resource`."
   @spec new(Ash.Resource.t(), Ash.Resource.t()) :: t()
   # sobelow_skip ["DOS.BinToAtom"]
   def new(resource, attachment_resource) do
+    [key] = Ash.Resource.Info.primary_key(resource)
+
     attachment_resource
     |> Spark.Dsl.Extension.get_entities([:attachment])
     |> Enum.find(&(&1.resource == resource))
     |> case do
-      nil -> %__MODULE__{record_type: AshStorage.Info.record_type(resource)}
-      parent -> %__MODULE__{foreign_key: :"#{parent.name}_id"}
+      nil -> %__MODULE__{key: key, record_type: AshStorage.Info.record_type(resource)}
+      parent -> %__MODULE__{key: key, foreign_key: :"#{parent.name}_id"}
     end
   end
 
@@ -34,18 +38,18 @@ defmodule AshStorage.Pipeline.Owner do
 
     case owner do
       %__MODULE__{foreign_key: nil, record_type: record_type} ->
-        [name: name, record_type: record_type, record_id: id(record)]
+        [name: name, record_type: record_type, record_id: id(owner, record)]
 
       %__MODULE__{foreign_key: foreign_key} ->
-        [{:name, name}, {foreign_key, id(record)}]
+        [{:name, name}, {foreign_key, id(owner, record)}]
     end
   end
 
   @doc "Where an analyzer writes its `write_attributes` back to: the host record."
   @spec write_target(Target.t(), struct()) :: map()
-  def write_target(%Target{resource: resource}, record) do
-    %{"resource" => to_string(resource), "id" => id(record)}
+  def write_target(%Target{resource: resource, owner: owner}, record) do
+    %{"resource" => to_string(resource), "id" => id(owner, record)}
   end
 
-  defp id(record), do: Map.get(record, :id) |> to_string()
+  defp id(%__MODULE__{key: key}, record), do: record |> Map.fetch!(key) |> to_string()
 end

@@ -112,6 +112,9 @@ defmodule MyApp.Post do
 end
 ```
 
+A host resource needs a single primary key attribute: attachments refer to their record
+by it, whatever its name.
+
 This automatically adds:
 
 - `has_one :cover_image` / `has_many :documents` relationships to load attachments
