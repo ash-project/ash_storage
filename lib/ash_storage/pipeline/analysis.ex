@@ -37,11 +37,12 @@ defmodule AshStorage.Pipeline.Analysis do
   @doc """
   Runs the eager analyzers that accept the blob's content type on `source`,
   and returns the blob with their outcomes and the host attributes their
-  `write_attributes` map to.
+  `write_attributes` map to. With `:remote` the bytes are downloaded from the
+  blob's service first, once, and only when such an analyzer exists.
   """
-  @spec run_eager(struct(), Source.t(), Target.t(), Scope.t()) ::
+  @spec run_eager(struct(), Source.t() | :remote, Target.t(), Scope.t()) ::
           {:ok, struct(), map()} | {:error, term()}
-  def run_eager(blob, %Source{} = source, %Target{} = target, %Scope{} = scope) do
+  def run_eager(blob, source, %Target{} = target, %Scope{} = scope) do
     content_type = blob.content_type || "application/octet-stream"
 
     case Enum.filter(analyzers(target), fn {module, analyze, _, _} ->
@@ -51,21 +52,43 @@ defmodule AshStorage.Pipeline.Analysis do
         {:ok, blob, %{}}
 
       eager ->
-        Source.with_local_path(source, fn path ->
-          Enum.reduce_while(eager, {:ok, blob, %{}}, fn {module, _, opts, write_attributes},
-                                                        {:ok, blob, writes} ->
-            outcome = execute(module, path, opts)
-
-            case complete(blob, to_string(module), outcome, scope) do
-              {:ok, blob} ->
-                {:cont, {:ok, blob, Map.merge(writes, host_writes(outcome, write_attributes))}}
-
-              {:error, _} = error ->
-                {:halt, error}
-            end
-          end)
-        end)
+        with {:ok, source} <- fetch(source, blob, target, scope) do
+          run_each(eager, blob, source, scope)
+        end
     end
+  end
+
+  defp fetch(%Source{} = source, _blob, _target, _scope), do: {:ok, source}
+
+  defp fetch(:remote, blob, target, scope) do
+    ctx =
+      blob
+      |> Target.blob_context(scope, target)
+      |> AshStorage.Service.Context.put_expected_md5(presence(blob.checksum))
+
+    with {:ok, data} <- blob.service_name.download(blob.key, ctx) do
+      {:ok, Source.new(data)}
+    end
+  end
+
+  defp presence(value) when value in [nil, ""], do: nil
+  defp presence(value), do: value
+
+  defp run_each(eager, blob, source, scope) do
+    Source.with_local_path(source, fn path ->
+      Enum.reduce_while(eager, {:ok, blob, %{}}, fn {module, _, opts, write_attributes},
+                                                    {:ok, blob, writes} ->
+        outcome = execute(module, path, opts)
+
+        case complete(blob, to_string(module), outcome, scope) do
+          {:ok, blob} ->
+            {:cont, {:ok, blob, Map.merge(writes, host_writes(outcome, write_attributes))}}
+
+          {:error, _} = error ->
+            {:halt, error}
+        end
+      end)
+    end)
   end
 
   @doc "Runs one analyzer on a local file."

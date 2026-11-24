@@ -16,10 +16,13 @@ defmodule AshStorage.Pipeline.Hooks do
   @doc """
   Attaches a file to the record written by the action.
 
-  `input` is `{:upload, io, source_opts}`: the bytes are uploaded and
-  analyzed before the action writes the record, so that the analyzers'
-  `write_attributes` are part of that write. The blob is linked to the
-  record, and its variants and background jobs started, after the write.
+  `input` is `{:upload, io, source_opts}`, bytes to upload, or
+  `{:blob, blob_id}`, a blob uploaded directly to the service. Either is
+  stored or confirmed, and analyzed, before the action writes the record, so
+  that the analyzers' `write_attributes` are part of that write and a bad
+  blob id fails before anything is written. The blob is linked to the record,
+  and its variants and background jobs started, after the write. A blob the
+  record already has under this attachment is only linked again.
 
   Options:
 
@@ -28,9 +31,14 @@ defmodule AshStorage.Pipeline.Hooks do
   - `:metadata_keys` - `{blob_key, attachment_key}`, the metadata keys under
     which the result carries the blob and the attachment row
   """
-  @spec attach(Ash.Changeset.t(), map(), atom(), {:upload, term(), keyword()}, keyword()) ::
-          Ash.Changeset.t()
-  def attach(changeset, context, attachment_name, {:upload, io, source_opts}, opts) do
+  @spec attach(
+          Ash.Changeset.t(),
+          map(),
+          atom(),
+          {:upload, term(), keyword()} | {:blob, term()},
+          keyword()
+        ) :: Ash.Changeset.t()
+  def attach(changeset, context, attachment_name, input, opts) do
     key = {attachment_name, Keyword.fetch!(opts, :argument)}
     {blob_key, attachment_key} = Keyword.fetch!(opts, :metadata_keys)
     nested? = nested?(changeset)
@@ -40,11 +48,13 @@ defmodule AshStorage.Pipeline.Hooks do
       scope = Scope.from_change(changeset, context)
 
       with {:ok, target} <- Pipeline.resolve(changeset.resource, attachment_name),
-           source = Source.new(io, source_opts),
-           {:ok, blob, :stored} <- Pipeline.store(source, target, scope, changeset),
-           {:ok, blob, attributes} <-
-             Pipeline.analyze(blob, source, target, scope, changeset.data) do
-        state = Map.put(changeset.context[@state] || %{}, key, %{blob: blob, target: target})
+           {:ok, blob, origin, attributes} <- prepare(input, target, scope, changeset) do
+        state =
+          Map.put(changeset.context[@state] || %{}, key, %{
+            blob: blob,
+            target: target,
+            origin: origin
+          })
 
         changeset
         |> Ash.Changeset.force_change_attributes(attributes)
@@ -55,11 +65,11 @@ defmodule AshStorage.Pipeline.Hooks do
     end)
     |> Ash.Changeset.after_action(fn changeset, record ->
       case changeset.context[@state][key] do
-        %{blob: blob, target: target} ->
+        %{blob: blob, target: target, origin: origin} ->
           scope = Scope.from_change(changeset, context)
 
           with {:ok, linked} <- Pipeline.link(record, blob, target, scope),
-               {:ok, blob} <- Pipeline.derive(linked.blob, target, scope) do
+               {:ok, blob} <- derive(origin, linked, target, scope) do
             {:ok,
              record
              |> Ash.Resource.put_metadata(blob_key, blob)
@@ -75,6 +85,41 @@ defmodule AshStorage.Pipeline.Hooks do
     end)
     |> delete_after_transaction(nested?)
   end
+
+  defp prepare({:upload, io, source_opts}, target, scope, changeset) do
+    source = Source.new(io, source_opts)
+
+    with {:ok, blob, :stored} <- Pipeline.store(source, target, scope, changeset),
+         {:ok, blob, attributes} <-
+           Pipeline.analyze(blob, source, target, scope, changeset.data) do
+      {:ok, blob, :stored, attributes}
+    end
+  end
+
+  defp prepare({:blob, blob_id}, target, scope, changeset) do
+    record = if changeset.action_type == :create, do: nil, else: changeset.data
+
+    case Pipeline.adopt(blob_id, target, scope, record) do
+      {:ok, blob, :linked} ->
+        {:ok, blob, :linked, %{}}
+
+      {:ok, blob, :adopted} ->
+        with {:ok, blob, attributes} <-
+               Pipeline.analyze(blob, :remote, target, scope, changeset.data) do
+          {:ok, blob, :adopted, attributes}
+        end
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  # A blob this record already had was derived when it came. On a create the
+  # record is unknown before the write, as on an upsert, so only `link/4` can
+  # tell that the row was there already.
+  defp derive(:linked, %{blob: blob}, _target, _scope), do: {:ok, blob}
+  defp derive(_origin, %{kept?: true, blob: blob}, _target, _scope), do: {:ok, blob}
+  defp derive(_origin, %{blob: blob}, target, scope), do: Pipeline.derive(blob, target, scope)
 
   @doc """
   Turns a step's error into the failure of the hook it ran in: an error on

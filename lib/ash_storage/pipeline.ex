@@ -82,15 +82,99 @@ defmodule AshStorage.Pipeline do
   Records the target's analyzers on `blob` and runs the eager ones on
   `source`. Returns the host attributes their `write_attributes` map to, for
   the host action to write. `record` is the host record as the action sees
-  it before its write, so on a create its key is not known yet.
+  it before its write, so on a create its key is not known yet. With
+  `:remote` the bytes come from the blob's service, for a direct upload.
   """
-  @spec analyze(struct(), Source.t(), Target.t(), Scope.t(), struct()) ::
+  @spec analyze(struct(), Source.t() | :remote, Target.t(), Scope.t(), struct()) ::
           {:ok, struct(), map()} | {:error, term()}
-  def analyze(blob, %Source{} = source, %Target{} = target, %Scope{} = scope, record) do
+  def analyze(blob, source, %Target{} = target, %Scope{} = scope, record) do
     with {:ok, blob} <- Analysis.init(blob, target, scope, record) do
       Analysis.run_eager(blob, source, target, scope)
     end
   end
+
+  @doc """
+  Takes a blob that was uploaded directly to the service.
+
+  The blob must be readable with `scope`, and must be neither a variant nor
+  marked for purge. When `record` already links this blob under the target's
+  attachment it is `:linked`, and nothing else is asked. Otherwise the
+  service confirms the upload with `head/2`, when it has one: the blob's
+  checksum must match the service's, an empty one is filled in from it.
+  """
+  @spec adopt(term(), Target.t(), Scope.t(), struct() | nil) ::
+          {:ok, struct(), :adopted | :linked} | {:error, term()}
+  def adopt(blob_ref, %Target{} = target, %Scope{} = scope, record) do
+    with {:ok, blob} <- fetch_adoptable(blob_ref, target, scope) do
+      case linked?(blob, record, target, scope) do
+        {:ok, true} ->
+          {:ok, blob, :linked}
+
+        {:ok, false} ->
+          with {:ok, blob} <- confirm(blob, target, scope), do: {:ok, blob, :adopted}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp fetch_adoptable(blob_ref, target, scope) do
+    case Ash.get(target.blob_resource, blob_ref, Scope.to_opts(scope)) do
+      {:ok, %{variant_of_blob_id: nil, pending_purge: false} = blob} -> {:ok, blob}
+      _ -> {:error, :blob_not_found}
+    end
+  end
+
+  defp linked?(_blob, nil, _target, _scope), do: {:ok, false}
+
+  defp linked?(blob, record, target, scope) do
+    with {:ok, rows} <- attachments(record, target, scope, blob_id: blob.id) do
+      {:ok, rows != []}
+    end
+  end
+
+  defp confirm(blob, target, scope) do
+    service_mod = blob.service_name
+
+    if Code.ensure_loaded?(service_mod) and function_exported?(service_mod, :head, 2) do
+      with {:ok, info} <- service_mod.head(blob.key, Target.blob_context(blob, scope, target)) do
+        compare_checksum(blob, service_md5(info), scope)
+      end
+    else
+      {:ok, blob}
+    end
+  end
+
+  defp compare_checksum(blob, service_md5, scope) do
+    case if(blob.checksum in [nil, ""], do: nil, else: blob.checksum) do
+      ^service_md5 ->
+        {:ok, blob}
+
+      nil ->
+        blob
+        |> Ash.Changeset.for_update(:update_metadata, %{}, Scope.to_opts(scope))
+        |> Ash.Changeset.force_change_attribute(:checksum, service_md5)
+        |> Ash.update(Scope.to_opts(scope))
+
+      _ when is_nil(service_md5) ->
+        {:error, :checksum_unverifiable}
+
+      _ ->
+        {:error, :checksum_mismatch}
+    end
+  end
+
+  defp service_md5(%{content_md5: md5}) when is_binary(md5), do: md5
+
+  defp service_md5(%{etag: etag}) when is_binary(etag) do
+    case etag |> String.trim("\"") |> Base.decode16(case: :lower) do
+      {:ok, raw} when byte_size(raw) == 16 -> Base.encode64(raw)
+      _ -> nil
+    end
+  end
+
+  defp service_md5(_), do: nil
 
   defp normalize_upload(:ok), do: {:ok, %{}}
   defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
@@ -320,10 +404,7 @@ defmodule AshStorage.Pipeline do
     end
   end
 
-  @doc "Creates the attachment row that links `blob` to `record`."
-  @spec insert_attachment(struct(), struct(), Target.t(), Scope.t()) ::
-          {:ok, struct()} | {:error, term()}
-  def insert_attachment(record, blob, %Target{} = target, %Scope{} = scope) do
+  defp insert_attachment(record, blob, %Target{} = target, %Scope{} = scope) do
     params = Map.new(Owner.keys(target, record) ++ [blob_id: blob.id])
 
     Ash.create(target.attachment_resource, params, Scope.to_opts(scope, action: :create))

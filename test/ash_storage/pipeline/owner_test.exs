@@ -85,7 +85,7 @@ defmodule AshStorage.Pipeline.OwnerTest do
     end
   end
 
-  test "Pipeline.insert_attachment/4 creates the row the attach action creates" do
+  test "Pipeline.link/4 creates the row the attach action creates" do
     post = Ash.create!(ConfigurablePost, %{title: "row"})
 
     {:ok, %{blob: blob, attachment: attached}} =
@@ -93,8 +93,8 @@ defmodule AshStorage.Pipeline.OwnerTest do
 
     other = Ash.create!(ConfigurablePost, %{title: "row"})
 
-    assert {:ok, inserted} =
-             Pipeline.insert_attachment(other, blob, target!(ConfigurablePost, :avatar), %Scope{})
+    assert {:ok, %{attachment: inserted}} =
+             Pipeline.link(other, blob, target!(ConfigurablePost, :avatar), %Scope{})
 
     fields = [:name, :record_type, :blob_id]
     assert Map.take(inserted, fields) == Map.take(attached, fields)

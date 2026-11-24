@@ -5,6 +5,113 @@ defmodule AshStorage.DirectUploadTest do
 
   alias AshStorage.Operations
 
+  defmodule CountingService do
+    @moduledoc false
+    # The Test service, telling the test process about every read
+    @behaviour AshStorage.Service
+
+    alias AshStorage.Service.Test
+
+    @impl true
+    def upload(key, data, ctx), do: Test.upload(key, data, ctx)
+
+    @impl true
+    def download(key, ctx) do
+      send(self(), {:download, key})
+      Test.download(key, ctx)
+    end
+
+    @impl true
+    def head(key, ctx) do
+      send(self(), {:head, key})
+      Test.head(key, ctx)
+    end
+
+    @impl true
+    def delete(key, ctx), do: Test.delete(key, ctx)
+
+    @impl true
+    def exists?(key, ctx), do: Test.exists?(key, ctx)
+
+    @impl true
+    def url(key, ctx), do: Test.url(key, ctx)
+
+    @impl true
+    def direct_upload(key, ctx), do: Test.direct_upload(key, ctx)
+  end
+
+  defmodule CountingDomain do
+    @moduledoc false
+    use Ash.Domain
+
+    resources do
+      resource AshStorage.DirectUploadTest.CountingPost
+    end
+  end
+
+  defmodule CountingPost do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshStorage.DirectUploadTest.CountingDomain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [AshStorage]
+
+    ets do
+      private? true
+    end
+
+    storage do
+      service({AshStorage.DirectUploadTest.CountingService, []})
+      blob_resource(AshStorage.Test.Blob)
+      attachment_resource(AshStorage.Test.PolymorphicAttachment)
+
+      has_one_attached(:plain)
+
+      has_one_attached :images_only do
+        analyzer(AshStorage.Test.ImageAnalyzer)
+      end
+
+      has_one_attached :analyzed do
+        analyzer(AshStorage.Test.TestAnalyzer)
+      end
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+
+    actions do
+      defaults [:read, create: []]
+
+      for name <- [:plain, :images_only, :analyzed] do
+        update :"attach_#{name}_blob" do
+          require_atomic? false
+          argument :blob_id, :uuid, allow_nil?: true
+
+          change {AshStorage.Changes.AttachBlob, argument: :blob_id, attachment: name}
+        end
+      end
+    end
+  end
+
+  defp uploaded!(resource, name, content, content_type \\ "text/plain") do
+    {:ok, %{blob: blob}} =
+      Operations.prepare_direct_upload(resource, name,
+        filename: "f.txt",
+        content_type: content_type,
+        byte_size: byte_size(content)
+      )
+
+    :ok = AshStorage.Service.Test.upload(blob.key, content, AshStorage.Service.Context.new([]))
+    blob
+  end
+
+  defp attach_counting(post, name, blob) do
+    post
+    |> Ash.Changeset.for_update(:"attach_#{name}_blob", %{blob_id: blob.id})
+    |> Ash.update()
+  end
+
   setup do
     AshStorage.Service.Test.reset!()
     :ok
@@ -247,6 +354,125 @@ defmodule AshStorage.DirectUploadTest do
         |> Ash.Changeset.for_update(:attach_blob, %{cover_image_blob_id: Ash.UUID.generate()})
         |> Ash.update!()
       end
+    end
+  end
+
+  describe "AttachBlob reads the object only when it has to" do
+    test "no download without an analyzer or an eager variant" do
+      post = Ash.create!(CountingPost, %{})
+      blob = uploaded!(CountingPost, :plain, "hello")
+
+      assert {:ok, _} = attach_counting(post, :plain, blob)
+      refute_received {:download, _}
+    end
+
+    test "no download when no analyzer accepts the content type" do
+      post = Ash.create!(CountingPost, %{})
+      blob = uploaded!(CountingPost, :images_only, "hello")
+
+      assert {:ok, _} = attach_counting(post, :images_only, blob)
+      refute_received {:download, _}
+    end
+
+    test "one download for an eager analyzer that accepts the content type" do
+      post = Ash.create!(CountingPost, %{})
+      blob = uploaded!(CountingPost, :analyzed, "one\ntwo")
+
+      assert {:ok, post} = attach_counting(post, :analyzed, blob)
+      key = blob.key
+      assert_received {:download, ^key}
+      refute_received {:download, _}
+      assert post.__metadata__[:analyzed_blob].metadata["line_count"] == 2
+    end
+
+    test "the blob already attached, sent again, asks the service nothing" do
+      post = Ash.create!(CountingPost, %{})
+      blob = uploaded!(CountingPost, :analyzed, "one\ntwo")
+      {:ok, post} = attach_counting(post, :analyzed, blob)
+      analyzers = post.__metadata__[:analyzed_blob].analyzers
+      flush_reads()
+
+      assert {:ok, post} = attach_counting(post, :analyzed, blob)
+      refute_received {:head, _}
+      refute_received {:download, _}
+      assert Ash.get!(AshStorage.Test.Blob, blob.id).analyzers == analyzers
+      assert post.__metadata__[:analyzed_attachment].blob_id == blob.id
+    end
+  end
+
+  describe "AttachBlob on an upsert" do
+    test "re-sending the blob the record already has does not derive it again" do
+      blob = uploaded!(AshStorage.Test.MatrixPost, :doc, "shout")
+
+      for _ <- 1..2 do
+        Ash.create!(AshStorage.Test.MatrixPost, %{slug: "resent", doc_blob_id: blob.id},
+          action: :upsert_with_doc_blob
+        )
+      end
+
+      assert [%{variant_name: "upper"}] = Ash.load!(blob, :variants).variants
+    end
+  end
+
+  describe "AttachBlob refuses blobs that cannot be attached" do
+    test "a variant blob" do
+      post = create_post!()
+
+      {:ok, %{blob: source}} =
+        AshStorage.Operations.attach(
+          Ash.create!(AshStorage.Test.VariantPost, %{title: "v"}),
+          :document,
+          "hello",
+          filename: "a.txt",
+          content_type: "text/plain"
+        )
+
+      [variant | _] = Ash.load!(source, :variants).variants
+
+      assert {:error, error} =
+               post
+               |> Ash.Changeset.for_update(:attach_blob, %{cover_image_blob_id: variant.id})
+               |> Ash.update()
+
+      assert Exception.message(error) =~ "blob_not_found"
+      assert Ash.load!(post, :cover_image).cover_image == nil
+    end
+
+    test "a blob marked for purge" do
+      post = create_post!()
+      blob = uploaded!(AshStorage.Test.Post, :cover_image, "marked")
+      Ash.Seed.update!(blob, %{pending_purge: true})
+
+      assert {:error, error} =
+               post
+               |> Ash.Changeset.for_update(:attach_blob, %{cover_image_blob_id: blob.id})
+               |> Ash.update()
+
+      assert Exception.message(error) =~ "blob_not_found"
+      assert Ash.load!(post, :cover_image).cover_image == nil
+    end
+
+    test "an unknown blob id fails a create before the record is written" do
+      assert {:error, _} =
+               AshStorage.Test.Post
+               |> Ash.Changeset.for_create(:create_with_blob, %{
+                 title: "never written",
+                 cover_image_blob_id: Ash.UUID.generate()
+               })
+               |> Ash.create()
+
+      assert [] =
+               AshStorage.Test.Post
+               |> Ash.Query.filter(title == "never written")
+               |> Ash.read!()
+    end
+  end
+
+  defp flush_reads do
+    receive do
+      {kind, _} when kind in [:head, :download] -> flush_reads()
+    after
+      0 -> :ok
     end
   end
 end

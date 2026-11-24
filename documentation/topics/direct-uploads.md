@@ -148,6 +148,39 @@ await fetch("/api/posts", {
 
 No separate confirm step — the blob is attached as part of the normal action.
 
+Before the record is written, the action reads the blob and asks the service
+whether the upload arrived intact (with `head/2`, for services that have it). An
+unknown blob id, a checksum that does not match, a variant blob or a blob marked
+for purge fails the action before anything is saved. Sending back the blob the
+record already has, as a form that re-submits its current value does, changes
+nothing and asks the service nothing.
+
+## Analyzers and variants
+
+A directly uploaded file gets everything its attachment declares, as a file
+attached any other way does:
+
+- eager analyzers run inside the action, and their `write_attributes` are part
+  of the record's write;
+- eager variants are generated after the record is written;
+- `analyze: :oban` analyzers and `generate: :oban` variants are recorded on the
+  blob and their jobs enqueued.
+
+The server never had the bytes of a direct upload, so the eager steps download
+them: once for all eager analyzers, when at least one of them accepts the
+file's content type, and once more for each eager variant. That happens inside
+the action and its database transaction. Analyzers are eager unless declared
+otherwise. Files large enough to be worth uploading directly are usually too
+large for that, so for those attachments declare `analyze: :oban` and
+`generate: :oban`, or leave variants on demand:
+
+```elixir
+has_one_attached :video do
+  analyzer MyApp.VideoInfo, analyze: :oban
+  variant :poster, MyApp.PosterFrame, generate: :oban
+end
+```
+
 ## Phoenix LiveView example
 
 ```elixir
