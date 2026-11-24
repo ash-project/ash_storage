@@ -2,11 +2,13 @@ defmodule AshStorage.ObanIntegrationTest do
   use AshStorage.RepoCase, async: false
   use Oban.Testing, repo: AshStorage.TestRepo
 
+  import ExUnit.CaptureLog
+
   require Ash.Query
 
   @moduletag :oban
 
-  alias AshStorage.Test.{PgBlob, PgPost}
+  alias AshStorage.Test.{PgAttachment, PgBlob, PgPost}
 
   setup do
     AshStorage.Service.Test.reset!()
@@ -41,25 +43,6 @@ defmodule AshStorage.ObanIntegrationTest do
       blob = Ash.load!(blob, :parsed_service_opts)
       # Test service doesn't define service_opts_fields, returns []
       assert blob.parsed_service_opts == []
-    end
-  end
-
-  describe "mark_for_purge" do
-    test "marks blob as pending_purge without deleting file" do
-      post = create_post!()
-
-      {:ok, %{blob: blob}} =
-        AshStorage.Operations.attach(post, :cover_image, "image data", filename: "photo.jpg")
-
-      assert AshStorage.Service.Test.exists?(blob.key)
-      refute blob.pending_purge
-
-      {:ok, [marked_blob]} =
-        AshStorage.Operations.mark_attachments_for_purge(post, :cover_image)
-
-      assert marked_blob.pending_purge
-      # File still exists - not deleted yet
-      assert AshStorage.Service.Test.exists?(blob.key)
     end
   end
 
@@ -170,6 +153,51 @@ defmodule AshStorage.ObanIntegrationTest do
       assert {:error, _} = Ash.get(PgBlob, blob.id)
     end
 
+    test "the destroyed record carries no private metadata" do
+      post = create_post!()
+      {:ok, _} = AshStorage.Operations.attach(post, :cover_image, "x", filename: "x.bin")
+
+      assert {:ok, destroyed} = Ash.destroy(post, return_destroyed?: true)
+      refute Map.has_key?(destroyed.__metadata__, :__ash_storage_deletions__)
+    end
+
+    test "does not mark a blob another attachment row references" do
+      post = create_post!()
+      other = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "shared", filename: "shared.bin")
+
+      Ash.create!(PgAttachment, %{name: "cover_image", post_id: other.id, blob_id: blob.id})
+
+      Ash.destroy!(post)
+
+      refute Ash.get!(PgBlob, blob.id).pending_purge
+    end
+
+    test "the purge_blob action removes the blob's variants first" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "hello",
+          filename: "hello.txt",
+          content_type: "text/plain"
+        )
+
+      [variant] = Ash.load!(blob, :variants).variants
+
+      Ash.destroy!(post)
+      marked = Ash.get!(PgBlob, blob.id)
+      assert marked.pending_purge
+
+      Ash.destroy!(marked, action: :purge_blob)
+
+      assert {:error, _} = Ash.get(PgBlob, variant.id)
+      assert {:error, _} = Ash.get(PgBlob, blob.id)
+      refute AshStorage.Service.Test.exists?(variant.key)
+      refute AshStorage.Service.Test.exists?(blob.key)
+    end
+
     test "detach-dependent attachments still work (documents)" do
       post = create_post!()
 
@@ -199,20 +227,78 @@ defmodule AshStorage.ObanIntegrationTest do
       assert {:error, _} = Ash.get(PgBlob, blob.id)
     end
 
-    test "keeps the file when the blob can't be destroyed" do
+    test "removes the blob's variants with it" do
       post = create_post!()
 
-      # The eager variant's blob references this blob, so the foreign key rejects the delete
       {:ok, %{blob: blob}} =
         AshStorage.Operations.attach(post, :cover_image, "hello",
           filename: "hello.txt",
           content_type: "text/plain"
         )
 
-      assert {:error, _} = AshStorage.Operations.purge(post, :cover_image)
+      [variant] = Ash.load!(blob, :variants).variants
 
-      assert AshStorage.Service.Test.exists?(blob.key)
+      assert {:ok, [_]} = AshStorage.Operations.purge(post, :cover_image)
+
+      assert {:error, _} = Ash.get(PgBlob, blob.id)
+      assert {:error, _} = Ash.get(PgBlob, variant.id)
+      refute AshStorage.Service.Test.exists?(blob.key)
+      refute AshStorage.Service.Test.exists?(variant.key)
+    end
+
+    test "keeps a blob another attachment row references" do
+      post = create_post!()
+      other = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "shared", filename: "shared.bin")
+
+      Ash.create!(PgAttachment, %{name: "cover_image", post_id: other.id, blob_id: blob.id})
+
+      assert {:ok, [_]} = AshStorage.Operations.purge(post, :cover_image)
       assert {:ok, _} = Ash.get(PgBlob, blob.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+
+      assert {:ok, [_]} = AshStorage.Operations.purge(other, :cover_image)
+      assert {:error, _} = Ash.get(PgBlob, blob.id)
+      refute AshStorage.Service.Test.exists?(blob.key)
+    end
+
+    test "a later hook that fails keeps the rows and the file" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "kept", filename: "kept.bin")
+
+      assert {:error, _} =
+               post
+               |> Ash.Changeset.for_update(:purge_cover_image, %{})
+               |> Ash.Changeset.after_action(fn _, _ -> {:error, "a later hook failed"} end)
+               |> Ash.update()
+
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+      assert AshStorage.Service.Test.exists?(blob.key)
+      assert Ash.load!(post, :cover_image).cover_image.blob_id == blob.id
+    end
+
+    test "inside the caller's transaction, deletes the file before it commits" do
+      post = create_post!()
+
+      {:ok, %{blob: blob}} =
+        AshStorage.Operations.attach(post, :cover_image, "gone", filename: "gone.bin")
+
+      log =
+        capture_log(fn ->
+          TestRepo.transaction(fn ->
+            {:ok, [_]} = AshStorage.Operations.purge(post, :cover_image)
+            TestRepo.rollback(:undo)
+          end)
+        end)
+
+      refute log =~ "after_transaction"
+      # The rows come back with the rollback; the file does not (#66)
+      assert {:ok, _} = Ash.get(PgBlob, blob.id)
+      refute AshStorage.Service.Test.exists?(blob.key)
     end
   end
 end

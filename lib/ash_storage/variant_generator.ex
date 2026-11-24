@@ -1,7 +1,7 @@
 defmodule AshStorage.VariantGenerator do
   @moduledoc false
 
-  alias AshStorage.Info
+  alias AshStorage.Pipeline.{Scope, Target}
   alias AshStorage.Service.Context
   alias AshStorage.VariantDefinition
 
@@ -11,21 +11,21 @@ defmodule AshStorage.VariantGenerator do
   Downloads the source, runs the transform, uploads the result, and creates a variant blob record.
   Returns `{:ok, variant_blob}` or `{:error, reason}`.
   """
-  def generate(source_blob, variant_def, resource, attachment_def) do
+  def generate(source_blob, variant_def, %Target{} = target, %Scope{} = scope) do
     {module, opts} = VariantDefinition.normalize(variant_def)
     digest = VariantDefinition.digest(variant_def)
     content_type = source_blob.content_type || "application/octet-stream"
 
     if module.accept?(content_type) do
-      do_generate(source_blob, module, opts, digest, variant_def.name, resource, attachment_def)
+      do_generate(source_blob, module, opts, digest, variant_def.name, target, scope)
     else
       {:error, :not_accepted}
     end
   end
 
-  defp do_generate(source_blob, module, opts, digest, variant_name, resource, attachment_def) do
-    with {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
-         {:ok, source_data} <- AshStorage.Operations.download(source_blob),
+  defp do_generate(source_blob, module, opts, digest, variant_name, target, scope) do
+    with {:ok, {service_mod, ctx}} <- Target.service_context(target, scope),
+         {:ok, source_data} <- AshStorage.Operations.download(source_blob, Scope.to_opts(scope)),
          {:ok, transform_result, variant_data} <- run_transform(module, opts, source_data) do
       upload_and_create_variant(
         source_blob,
@@ -33,10 +33,10 @@ defmodule AshStorage.VariantGenerator do
         digest,
         transform_result,
         variant_data,
-        resource,
+        target,
+        scope,
         service_mod,
-        service_opts,
-        attachment_def
+        ctx
       )
     end
   end
@@ -73,11 +73,10 @@ defmodule AshStorage.VariantGenerator do
          digest,
          transform_metadata,
          variant_data,
-         resource,
+         target,
+         scope,
          service_mod,
-         service_opts,
-         attachment_def,
-         action_opts \\ []
+         ctx
        ) do
     checksum = :crypto.hash(:md5, variant_data) |> Base.encode64()
     byte_size = byte_size(variant_data)
@@ -92,12 +91,6 @@ defmodule AshStorage.VariantGenerator do
       transform_metadata
       |> Map.drop([:content_type, :filename])
 
-    ctx =
-      Context.new(service_opts,
-        resource: resource,
-        attachment: attachment_def
-      )
-
     # Mirrors what attach.ex and handle_file_argument.ex already do for the
     # primary upload: without this, ctx.content_type and ctx.filename are
     # nil for every variant, so services that forward them onto the
@@ -107,8 +100,6 @@ defmodule AshStorage.VariantGenerator do
       ctx
       |> Context.put_expected_md5(checksum)
       |> Context.put_blob_metadata(content_type: variant_content_type, filename: variant_filename)
-
-    blob_resource = Info.storage_blob_resource!(resource)
 
     with {:ok, key} <- AshStorage.resolve_variant_key(source_blob.key),
          {:ok, extra_blob_attrs} <- normalize_upload(service_mod.upload(key, variant_data, ctx)) do
@@ -120,7 +111,7 @@ defmodule AshStorage.VariantGenerator do
           byte_size: byte_size,
           checksum: checksum,
           service_name: service_mod,
-          service_opts: persistable_service_opts(service_mod, service_opts),
+          service_opts: Target.persistable_service_opts(service_mod, ctx.service_opts),
           metadata: extra_metadata,
           variant_of_blob_id: source_blob.id,
           variant_name: to_string(variant_name),
@@ -128,31 +119,11 @@ defmodule AshStorage.VariantGenerator do
         }
         |> Map.merge(extra_blob_attrs)
 
-      Ash.create(blob_resource, blob_attrs, Keyword.merge(action_opts, action: :create_variant))
+      Ash.create(target.blob_resource, blob_attrs, Scope.to_opts(scope, action: :create_variant))
     end
   end
 
   defp normalize_upload(:ok), do: {:ok, %{}}
   defp normalize_upload({:ok, attrs}) when is_map(attrs), do: {:ok, attrs}
   defp normalize_upload({:error, _} = error), do: error
-
-  defp resolve_service(resource, attachment_def) do
-    case Info.service_for_attachment(resource, attachment_def) do
-      {:ok, service} -> {:ok, service}
-      :error -> {:error, :no_service_configured}
-    end
-  end
-
-  defp persistable_service_opts(service_mod, service_opts) do
-    if function_exported?(service_mod, :service_opts_fields, 0) do
-      fields = service_mod.service_opts_fields()
-      field_names = Keyword.keys(fields)
-
-      service_opts
-      |> Keyword.take(field_names)
-      |> Map.new()
-    else
-      %{}
-    end
-  end
 end

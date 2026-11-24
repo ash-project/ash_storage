@@ -21,6 +21,16 @@ defmodule AshStorage.Test.PgPost do
     end
 
     has_many_attached(:documents, dependent: :detach)
+
+    has_one_attached :report do
+      analyzer(AshStorage.Test.TestAnalyzer, analyze: :oban)
+      variant(:eager_upper, AshStorage.Test.UppercaseVariant, generate: :eager)
+      variant(:oban_upper, AshStorage.Test.UppercaseVariant, generate: :oban)
+    end
+
+    has_one_attached :fragile do
+      variant(:checked, AshStorage.Test.FailOnMarkerVariant, generate: :eager)
+    end
   end
 
   attributes do
@@ -30,5 +40,21 @@ defmodule AshStorage.Test.PgPost do
 
   actions do
     defaults [:read, :destroy, create: [:title], update: [:title]]
+
+    for name <- [:cover_image, :report, :fragile] do
+      update :"update_#{name}" do
+        require_atomic? false
+        argument name, :file, allow_nil?: true
+
+        change {AshStorage.Changes.HandleFileArgument, argument: name, attachment: name}
+      end
+
+      update :"update_#{name}_blob" do
+        require_atomic? false
+        argument :"#{name}_blob_id", :uuid, allow_nil?: true
+
+        change {AshStorage.Changes.AttachBlob, argument: :"#{name}_blob_id", attachment: name}
+      end
+    end
   end
 end

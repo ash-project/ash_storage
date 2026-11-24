@@ -25,10 +25,8 @@ defmodule AshStorage.Changes.AttachBlob do
   """
   use Ash.Resource.Change
 
-  require Ash.Query
-
-  alias AshStorage.Info
-  alias AshStorage.Service.Context
+  alias AshStorage.Pipeline
+  alias AshStorage.Pipeline.{Hooks, Scope, Target}
 
   @impl true
   def init(opts) do
@@ -47,61 +45,45 @@ defmodule AshStorage.Changes.AttachBlob do
   def change(changeset, opts, context) do
     argument_name = opts[:argument]
     attachment_name = opts[:attachment]
+    nested? = Hooks.nested?(changeset)
 
-    Ash.Changeset.after_action(changeset, fn _changeset, record ->
+    changeset
+    |> Ash.Changeset.after_action(fn changeset, record ->
       blob_id = Ash.Changeset.get_argument(changeset, argument_name)
 
       if is_nil(blob_id) do
         {:ok, record}
       else
-        resource = record.__struct__
-        context_opts = Ash.Context.to_opts(context)
+        scope = Scope.from_change(changeset, context)
 
-        with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-             {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def),
-             ctx = build_context(service_opts, resource, attachment_def, changeset),
-             {:ok, blob} <- fetch_blob(resource, blob_id, context_opts),
-             {:ok, existing} <- find_attachments(record, attachment_def, blob, context_opts),
-             {:ok, blob, attachment} <-
-               attach(record, attachment_def, blob, existing, service_mod, ctx, context_opts) do
+        with {:ok, target} <- Pipeline.resolve(record.__struct__, attachment_name),
+             {:ok, {service_mod, ctx}} <- Target.service_context(target, scope),
+             {:ok, blob} <- fetch_blob(target, blob_id, scope),
+             {:ok, existing} <- existing_attachments(record, target, blob, scope),
+             {:ok, blob, attachment, deletions} <-
+               attach(record, target, blob, existing, service_mod, ctx, scope) do
           record =
             record
             |> Ash.Resource.put_metadata(:"#{attachment_name}_blob", blob)
             |> Ash.Resource.put_metadata(:"#{attachment_name}_attachment", attachment)
+            |> Hooks.defer_deletions(deletions, nested?)
 
           {:ok, record}
         end
       end
     end)
+    |> Hooks.delete_after_transaction(nested?)
   end
 
-  defp resolve_service(resource, attachment_def) do
-    case Info.service_for_attachment(resource, attachment_def) do
-      {:ok, service} -> {:ok, service}
-      :error -> {:error, :no_service_configured}
-    end
-  end
-
-  defp build_context(service_opts, resource, attachment_def, changeset) do
-    Context.new(service_opts,
-      resource: resource,
-      attachment: attachment_def,
-      actor: changeset.context[:private][:actor],
-      tenant: changeset.tenant
-    )
-  end
-
-  defp fetch_blob(resource, blob_id, context_opts) do
-    blob_resource = Info.storage_blob_resource!(resource)
-
-    case Ash.get(blob_resource, blob_id, context_opts) do
+  defp fetch_blob(target, blob_id, scope) do
+    case Ash.get(target.blob_resource, blob_id, Scope.to_opts(scope)) do
       {:ok, blob} -> {:ok, blob}
       {:error, _} -> {:error, :blob_not_found}
     end
   end
 
-  defp verify_blob(blob, service_mod, ctx, context_opts) do
-    with :ok <- if(function_exported?(service_mod, :head, 2), do: :ok, else: {:ok, blob}),
+  defp verify_blob(blob, service_mod, ctx, scope) do
+    with :ok <- if(exports_head?(service_mod), do: :ok, else: {:ok, blob}),
          {:ok, info} <- service_mod.head(blob.key, ctx) do
       service_md5 = service_md5(info)
 
@@ -111,9 +93,9 @@ defmodule AshStorage.Changes.AttachBlob do
 
         nil ->
           blob
-          |> Ash.Changeset.for_update(:update_metadata, %{}, context_opts)
+          |> Ash.Changeset.for_update(:update_metadata, %{}, Scope.to_opts(scope))
           |> Ash.Changeset.force_change_attribute(:checksum, service_md5)
-          |> Ash.update(context_opts)
+          |> Ash.update(Scope.to_opts(scope))
 
         _ when is_nil(service_md5) ->
           {:error, :checksum_unverifiable}
@@ -122,6 +104,10 @@ defmodule AshStorage.Changes.AttachBlob do
           {:error, :checksum_mismatch}
       end
     end
+  end
+
+  defp exports_head?(service_mod) do
+    Code.ensure_loaded?(service_mod) and function_exported?(service_mod, :head, 2)
   end
 
   defp service_md5(%{content_md5: md5}) when is_binary(md5), do: md5
@@ -140,119 +126,36 @@ defmodule AshStorage.Changes.AttachBlob do
 
   # Attaching the blob that is already attached is a no-op, so that e.g. a form
   # sending back the current blob id doesn't purge the file it points to.
-  defp attach(record, attachment_def, blob, existing, service_mod, ctx, context_opts) do
+  defp attach(record, target, blob, existing, service_mod, ctx, scope) do
     case Enum.split_with(existing, &(&1.blob_id == blob.id)) do
       {[attachment | _], others} ->
-        with {:ok, _} <-
-               maybe_replace_existing(others, attachment_def, service_mod, ctx, context_opts) do
-          {:ok, blob, attachment}
+        with {:ok, deletions} <- replace_others(others, target, scope) do
+          {:ok, blob, attachment, deletions}
         end
 
       {[], others} ->
-        with {:ok, blob} <- verify_blob(blob, service_mod, ctx, context_opts),
-             {:ok, _} <-
-               maybe_replace_existing(others, attachment_def, service_mod, ctx, context_opts),
-             {:ok, attachment} <- create_attachment(record, attachment_def, blob, context_opts) do
-          {:ok, blob, attachment}
+        with {:ok, blob} <- verify_blob(blob, service_mod, ctx, scope),
+             {:ok, deletions} <- replace_others(others, target, scope),
+             {:ok, attachment} <- Pipeline.insert_attachment(record, blob, target, scope) do
+          {:ok, blob, attachment, deletions}
         end
     end
   end
 
-  defp maybe_replace_existing([], _attachment_def, _service_mod, _ctx, _context_opts),
-    do: {:ok, :noop}
-
-  defp maybe_replace_existing(existing, %{type: :one}, service_mod, ctx, context_opts),
-    do: purge_attachments(existing, service_mod, ctx, context_opts)
-
-  defp maybe_replace_existing(_existing, %{type: :many}, _service_mod, _ctx, _context_opts),
-    do: {:ok, :noop}
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp create_attachment(record, attachment_def, blob, context_opts) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    params =
-      if parent_rel do
-        fk_attr = :"#{parent_rel.name}_id"
-
-        Map.new([
-          {:name, to_string(attachment_def.name)},
-          {fk_attr, record_id},
-          {:blob_id, blob.id}
-        ])
-      else
-        %{
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id,
-          blob_id: blob.id
-        }
-      end
-
-    Ash.create(attachment_resource, params, Keyword.merge(context_opts, action: :create))
+  # Replacing a has_one file removes the old one through the shared purge; the
+  # old files are deleted once the transaction has committed.
+  defp replace_others(others, %Target{attachment: %{type: :one}} = target, scope) do
+    with {:ok, %{deletions: deletions}} <- Pipeline.unlink(others, :purge, target, scope) do
+      {:ok, deletions}
+    end
   end
 
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, blob, context_opts) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
+  defp replace_others(_others, %Target{attachment: %{type: :many}}, _scope), do: {:ok, []}
 
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
+  # has_many appends, so only an existing attachment of this blob matters
+  defp existing_attachments(record, %Target{attachment: %{type: :one}} = target, _blob, scope),
+    do: Pipeline.attachments(record, target, scope)
 
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    filter =
-      if parent_rel do
-        [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-      else
-        [
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id
-        ]
-      end
-
-    # has_many appends, so only an existing attachment of this blob matters
-    filter =
-      case attachment_def.type do
-        :one -> filter
-        :many -> [{:blob_id, blob.id} | filter]
-      end
-
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
-  end
-
-  defp purge_attachments(attachments, service_mod, ctx, context_opts) do
-    destroy_opts = Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
-
-    Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-      blob = att.blob
-
-      with {:ok, _} <- Ash.destroy(att, destroy_opts),
-           {:ok, _} <- Ash.destroy(blob, destroy_opts),
-           :ok <- AshStorage.Operations.delete_blob_file(blob, service_mod, ctx) do
-        {:cont, {:ok, [att | acc]}}
-      else
-        {:error, error} -> {:halt, {:error, error}}
-      end
-    end)
-  end
+  defp existing_attachments(record, %Target{attachment: %{type: :many}} = target, blob, scope),
+    do: Pipeline.attachments(record, target, scope, blob_id: blob.id)
 end

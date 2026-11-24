@@ -164,15 +164,14 @@ defmodule AshStorage.VariantTest do
         generate: :on_demand
       }
 
-      {:ok, attachment_def} =
-        AshStorage.Info.attachment(AshStorage.Test.VariantPost, :document)
+      {:ok, target} = AshStorage.Pipeline.resolve(AshStorage.Test.VariantPost, :document)
 
       assert {:error, :transform_failed} =
                AshStorage.VariantGenerator.generate(
                  blob,
                  variant_def,
-                 AshStorage.Test.VariantPost,
-                 attachment_def
+                 target,
+                 %AshStorage.Pipeline.Scope{}
                )
     end
   end

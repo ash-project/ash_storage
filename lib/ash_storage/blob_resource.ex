@@ -36,7 +36,8 @@ defmodule AshStorage.BlobResource do
   - `:destroy` (destroy)
   - `:update_metadata` (update) - accepts only `:metadata`
   - `:mark_for_purge` (update) - sets `pending_purge` to `true`
-  - `:purge_blob` (destroy) - deletes the file from storage and destroys the record
+  - `:purge_blob` (destroy) - destroys the blob's variants and then the record, and
+    deletes their files from storage
 
   ## AshOban integration
 
@@ -62,7 +63,8 @@ defmodule AshStorage.BlobResource do
   When AshOban is detected on the blob resource, dependent attachment purging
   on record destroy will mark blobs as `pending_purge: true` instead of
   deleting files synchronously. The AshOban trigger then picks them up and
-  runs the `:purge_blob` action which deletes the file and destroys the record.
+  runs the `:purge_blob` action, which removes the blob's variants first and then
+  the blob, with their files.
   """
 
   @blob %Spark.Dsl.Section{

@@ -9,21 +9,6 @@ defmodule AshStorage.BlobResource.Calculations.ParsedServiceOpts do
 
   @impl true
   def calculate(records, _opts, _context) do
-    Enum.map(records, fn record ->
-      service_mod = record.service_name
-      stored_opts = record.service_opts || %{}
-
-      if Code.ensure_loaded?(service_mod) and
-           function_exported?(service_mod, :service_opts_fields, 0) do
-        fields = service_mod.service_opts_fields()
-
-        case Ash.Type.cast_stored(Ash.Type.Keyword, stored_opts, fields: fields) do
-          {:ok, opts} -> opts
-          _ -> []
-        end
-      else
-        []
-      end
-    end)
+    Enum.map(records, &AshStorage.Pipeline.Target.persisted_service_opts/1)
   end
 end

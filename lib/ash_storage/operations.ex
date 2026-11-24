@@ -13,9 +13,8 @@ defmodule AshStorage.Operations do
   - `:purge_<name>` — remove attachment + blob records and delete files
   """
 
-  require Ash.Query
-
-  alias AshStorage.Info
+  alias AshStorage.Pipeline
+  alias AshStorage.Pipeline.{Scope, Target}
   alias AshStorage.Service.Context
 
   @doc """
@@ -84,10 +83,8 @@ defmodule AshStorage.Operations do
   - `:tenant` - the tenant
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
-    with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
-      ctx = build_context(service_opts, resource, attachment_def, opts)
-
+    with {:ok, target} <- resolve_for_direct_upload(resource, attachment_name),
+         {:ok, {service_mod, ctx}} <- Target.service_context(target, Scope.from_opts(opts)) do
       {arg_opts, action_opts} =
         Keyword.split(opts, [:filename, :content_type, :byte_size, :checksum, :metadata])
 
@@ -97,12 +94,10 @@ defmodule AshStorage.Operations do
       checksum = Keyword.get(arg_opts, :checksum, "")
       metadata = Keyword.get(arg_opts, :metadata, %{})
 
-      blob_resource = Info.storage_blob_resource!(resource)
-
-      with {:ok, key} <- AshStorage.resolve_key(attachment_def, ctx, nil),
+      with {:ok, key} <- AshStorage.resolve_key(target.attachment, ctx, nil),
            {:ok, blob} <-
              Ash.create(
-               blob_resource,
+               target.blob_resource,
                %{
                  key: key,
                  filename: filename,
@@ -110,7 +105,7 @@ defmodule AshStorage.Operations do
                  byte_size: byte_size,
                  checksum: checksum,
                  service_name: service_mod,
-                 service_opts: persistable_service_opts(service_mod, service_opts),
+                 service_opts: Target.persistable_service_opts(service_mod, ctx.service_opts),
                  metadata: metadata
                },
                Keyword.merge(action_opts, action: :create)
@@ -118,6 +113,14 @@ defmodule AshStorage.Operations do
            {:ok, upload_info} <- service_mod.direct_upload(key, ctx) do
         {:ok, Map.put(upload_info, :blob, blob)}
       end
+    end
+  end
+
+  # This function has always answered a bare `:error` for an unknown attachment
+  defp resolve_for_direct_upload(resource, attachment_name) do
+    case Pipeline.resolve(resource, attachment_name) do
+      {:ok, target} -> {:ok, target}
+      {:error, {:unknown_attachment, _}} -> :error
     end
   end
 
@@ -206,21 +209,6 @@ defmodule AshStorage.Operations do
     service_mod.delete(key, ctx)
   end
 
-  @doc false
-  def delete_blob_file(blob, service_mod, %Context{} = ctx) do
-    blob = Ash.load!(blob, :parsed_service_opts)
-    stored_opts = blob.parsed_service_opts || []
-
-    service_opts =
-      if blob.service_name == service_mod do
-        Keyword.merge(ctx.service_opts, stored_opts)
-      else
-        stored_opts
-      end
-
-    blob.service_name.delete(blob.key, %{ctx | service_opts: service_opts})
-  end
-
   @doc """
   Download a blob's bytes from its storage service, verifying the body's MD5
   against `blob.checksum` when one is recorded.
@@ -237,7 +225,7 @@ defmodule AshStorage.Operations do
   def download(blob, opts \\ []) do
     ctx =
       blob
-      |> build_blob_context(opts)
+      |> Target.blob_context(Scope.from_opts(opts))
       |> Context.put_expected_md5(presence(blob.checksum))
 
     blob.service_name.download(blob.key, ctx)
@@ -267,7 +255,7 @@ defmodule AshStorage.Operations do
   - `:tenant` - the current tenant
   """
   def stream_download(blob, opts \\ []) do
-    ctx = build_blob_context(blob, opts)
+    ctx = Target.blob_context(blob, Scope.from_opts(opts))
 
     stream_download_from_service(blob.service_name, ctx, blob.key)
   end
@@ -313,12 +301,7 @@ defmodule AshStorage.Operations do
 
     case Map.fetch(blob_analyzers, analyzer_key) do
       {:ok, analyzer_entry} ->
-        tenant = Keyword.get(opts, :tenant) || analyzer_entry["tenant"]
-
-        context_opts =
-          opts
-          |> Keyword.put(:tenant, tenant)
-          |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
+        scope = opts |> Scope.from_opts() |> Scope.put_new_tenant(analyzer_entry["tenant"])
 
         analyzer_opts = analyzer_entry["opts"] || %{}
         content_type = blob.content_type || "application/octet-stream"
@@ -351,14 +334,10 @@ defmodule AshStorage.Operations do
                          status: status,
                          metadata_to_merge: metadata_to_merge
                        },
-                       Keyword.merge(context_opts, action: :complete_analysis)
+                       Scope.to_opts(scope, action: :complete_analysis)
                      ) do
                 if status == "complete" do
-                  maybe_apply_oban_write_attributes(
-                    analyzer_entry,
-                    metadata_to_merge,
-                    context_opts
-                  )
+                  maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge, scope)
                 end
 
                 {:ok, blob}
@@ -371,7 +350,7 @@ defmodule AshStorage.Operations do
           Ash.update(
             blob,
             %{analyzer_key: analyzer_key, status: "skipped", metadata_to_merge: %{}},
-            Keyword.merge(context_opts, action: :complete_analysis)
+            Scope.to_opts(scope, action: :complete_analysis)
           )
         end
 
@@ -380,85 +359,17 @@ defmodule AshStorage.Operations do
     end
   end
 
-  # -- Functions used by HandleDependentAttachments --
-
-  @doc false
-  def destroy_attachment_and_blob_records(record, attachment_name, context_opts \\ []) do
-    resource = record.__struct__
-
-    with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def, context_opts),
-         {:ok, {service_mod, service_opts}} <- resolve_service(resource, attachment_def) do
-      ctx = build_context(service_opts, resource, attachment_def, context_opts)
-
-      Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, keys_acc} ->
-        blob = att.blob
-
-        with {:ok, _} <-
-               Ash.destroy(
-                 att,
-                 Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
-               ),
-             {:ok, _} <-
-               Ash.destroy(
-                 blob,
-                 Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
-               ) do
-          {:cont, {:ok, [{service_mod, ctx, blob.key} | keys_acc]}}
-        else
-          {:error, error} -> {:halt, {:error, error}}
-        end
-      end)
-    end
-  end
-
-  @doc false
-  def mark_attachments_for_purge(record, attachment_name, context_opts \\ []) do
-    resource = record.__struct__
-
-    with {:ok, attachment_def} <- Info.attachment(resource, attachment_name),
-         {:ok, attachments} <- find_attachments(record, attachment_def, context_opts) do
-      Enum.reduce_while(attachments, {:ok, []}, fn att, {:ok, acc} ->
-        blob = att.blob
-
-        with {:ok, _} <-
-               Ash.destroy(
-                 att,
-                 Keyword.merge(context_opts, action: :destroy, return_destroyed?: true)
-               ),
-             {:ok, blob} <-
-               Ash.update(
-                 blob,
-                 %{pending_purge: true},
-                 Keyword.merge(context_opts,
-                   action: :mark_for_purge,
-                   return_record?: true
-                 )
-               ) do
-          {:cont, {:ok, [blob | acc]}}
-        else
-          {:error, error} -> {:halt, {:error, error}}
-        end
-      end)
-    end
-  end
-
   # -- Private helpers --
 
   # sobelow_skip ["DOS.BinToAtom"]
-  defp maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge, context_opts) do
+  defp maybe_apply_oban_write_attributes(analyzer_entry, metadata_to_merge, scope) do
     write_attributes = analyzer_entry["write_attributes"]
     write_target = analyzer_entry["write_target"]
 
     if write_attributes && write_target && map_size(write_attributes) > 0 do
       resource = String.to_existing_atom(write_target["resource"])
       record_id = write_target["id"]
-      tenant = context_opts[:tenant] || write_target["tenant"]
-
-      context_opts =
-        context_opts
-        |> Keyword.put(:tenant, tenant)
-        |> Keyword.take([:actor, :tenant, :authorize?, :tracer])
+      opts = scope |> Scope.put_new_tenant(write_target["tenant"]) |> Scope.to_opts()
 
       attrs =
         Enum.reduce(write_attributes, %{}, fn {result_key, attr_name}, acc ->
@@ -469,87 +380,17 @@ defmodule AshStorage.Operations do
         end)
 
       if map_size(attrs) > 0 do
-        case Ash.get(resource, record_id, context_opts) do
+        case Ash.get(resource, record_id, opts) do
           {:ok, record} ->
             record
             |> Ash.Changeset.for_update(:update, %{})
             |> Ash.Changeset.force_change_attributes(attrs)
-            |> Ash.update(context_opts)
+            |> Ash.update(opts)
 
           _ ->
             :ok
         end
       end
     end
-  end
-
-  defp build_blob_context(blob, opts) do
-    blob = Ash.load!(blob, :parsed_service_opts)
-
-    Context.new(blob.parsed_service_opts || [],
-      actor: Keyword.get(opts, :actor),
-      tenant: Keyword.get(opts, :tenant)
-    )
-  end
-
-  defp persistable_service_opts(service_mod, service_opts) do
-    if Code.ensure_loaded?(service_mod) and
-         function_exported?(service_mod, :service_opts_fields, 0) do
-      fields = service_mod.service_opts_fields()
-      field_names = Keyword.keys(fields)
-
-      service_opts
-      |> Keyword.take(field_names)
-      |> Map.new()
-    else
-      %{}
-    end
-  end
-
-  defp build_context(service_opts, resource, attachment_def, opts) do
-    Context.new(service_opts,
-      resource: resource,
-      attachment: attachment_def,
-      actor: Keyword.get(opts, :actor),
-      tenant: Keyword.get(opts, :tenant)
-    )
-  end
-
-  defp resolve_service(resource, attachment_def) do
-    case Info.service_for_attachment(resource, attachment_def) do
-      {:ok, service} -> {:ok, service}
-      :error -> {:error, :no_service_configured}
-    end
-  end
-
-  # sobelow_skip ["DOS.BinToAtom"]
-  defp find_attachments(record, attachment_def, context_opts) do
-    resource = record.__struct__
-    attachment_resource = Info.storage_attachment_resource!(resource)
-    record_id = Map.get(record, :id) |> to_string()
-
-    belongs_to_resources =
-      Spark.Dsl.Extension.get_entities(attachment_resource, [:attachment])
-
-    parent_rel =
-      Enum.find(belongs_to_resources, fn bt ->
-        bt.resource == resource
-      end)
-
-    filter =
-      if parent_rel do
-        [{:name, to_string(attachment_def.name)}, {:"#{parent_rel.name}_id", record_id}]
-      else
-        [
-          name: to_string(attachment_def.name),
-          record_type: to_string(resource),
-          record_id: record_id
-        ]
-      end
-
-    attachment_resource
-    |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
-    |> Ash.read(Keyword.take(context_opts, [:actor, :tenant, :authorize?, :tracer]))
   end
 end

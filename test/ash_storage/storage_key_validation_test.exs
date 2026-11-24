@@ -180,11 +180,16 @@ defmodule AshStorage.StorageKeyValidationTest do
           action: :create
         )
 
-      {:ok, attachment_def} = AshStorage.Info.attachment(Post, :document)
-      [variant_def] = attachment_def.variants
+      {:ok, target} = AshStorage.Pipeline.resolve(Post, :document)
+      [variant_def] = target.attachment.variants
 
       assert {:error, {:invalid_storage_key, :invalid_character, "org:123/" <> _}} =
-               AshStorage.VariantGenerator.generate(blob, variant_def, Post, attachment_def)
+               AshStorage.VariantGenerator.generate(
+                 blob,
+                 variant_def,
+                 target,
+                 %AshStorage.Pipeline.Scope{}
+               )
 
       assert AshStorage.Service.Test.list_keys() == [key]
       assert [%{id: id}] = rows(Blob)
