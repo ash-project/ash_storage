@@ -23,7 +23,14 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
       current_analyzers = record.analyzers || %{}
       current_metadata = record.metadata || %{}
 
-      updated_analyzers = put_in(current_analyzers, [analyzer_key, "status"], status)
+      updated_analyzers =
+        put_entry(
+          current_analyzers,
+          analyzer_key,
+          status,
+          Ash.Changeset.get_argument(changeset, :error)
+        )
+
       updated_metadata = Map.merge(current_metadata, metadata_to_merge)
 
       still_pending? =
@@ -60,7 +67,14 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
     current_analyzers = record.analyzers || %{}
     current_metadata = record.metadata || %{}
 
-    updated_analyzers = put_in(current_analyzers, [analyzer_key, "status"], status)
+    updated_analyzers =
+      put_entry(
+        current_analyzers,
+        analyzer_key,
+        status,
+        Ash.Changeset.get_argument(changeset, :error)
+      )
+
     updated_metadata = Map.merge(current_metadata, metadata_to_merge)
 
     still_pending? =
@@ -85,19 +99,33 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
     status = Ash.Changeset.get_argument(changeset, :status)
     metadata_to_merge = Ash.Changeset.get_argument(changeset, :metadata_to_merge) || %{}
 
-    atomics =
-      %{
-        analyzers:
-          {:atomic,
-           Ash.Expr.expr(
-             fragment(
-               "jsonb_set(coalesce(?, '{}'), ?::text[], to_jsonb(?::text))",
-               analyzers,
-               ^[analyzer_key, "status"],
-               ^status
-             )
-           )}
-      }
+    analyzers_expr =
+      case Ash.Changeset.get_argument(changeset, :error) do
+        nil ->
+          Ash.Expr.expr(
+            fragment(
+              "jsonb_set(coalesce(?, '{}'), ?::text[], to_jsonb(?::text)) #- ?::text[]",
+              analyzers,
+              ^[analyzer_key, "status"],
+              ^status,
+              ^[analyzer_key, "error"]
+            )
+          )
+
+        error ->
+          Ash.Expr.expr(
+            fragment(
+              "jsonb_set(jsonb_set(coalesce(?, '{}'), ?::text[], to_jsonb(?::text)), ?::text[], to_jsonb(?::text))",
+              analyzers,
+              ^[analyzer_key, "status"],
+              ^status,
+              ^[analyzer_key, "error"],
+              ^error
+            )
+          )
+      end
+
+    atomics = %{analyzers: {:atomic, analyzers_expr}}
 
     atomics =
       if metadata_to_merge != %{} do
@@ -135,5 +163,18 @@ defmodule AshStorage.BlobResource.Changes.CompleteAnalysis do
       )
 
     {:atomic, atomics}
+  end
+
+  # An outcome without an error clears the reason an earlier failure left
+  defp put_entry(analyzers, analyzer_key, status, nil) do
+    analyzers
+    |> put_in([analyzer_key, "status"], status)
+    |> update_in([analyzer_key], &Map.delete(&1, "error"))
+  end
+
+  defp put_entry(analyzers, analyzer_key, status, error) do
+    analyzers
+    |> put_in([analyzer_key, "status"], status)
+    |> put_in([analyzer_key, "error"], error)
   end
 end

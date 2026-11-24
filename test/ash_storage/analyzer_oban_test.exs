@@ -58,6 +58,30 @@ defmodule AshStorage.AnalyzerObanTest do
       assert updated_blob.metadata["line_count"] == 3
     end
 
+    test "a later success clears the reason of an earlier failure" do
+      post = create_post!()
+
+      blob =
+        attach_with_analyzers!(post, "one\ntwo",
+          filename: "file.txt",
+          content_type: "text/plain",
+          analyzers_map: %{
+            to_string(AshStorage.Test.TestAnalyzer) => %{
+              "status" => "error",
+              "error" => ":earlier",
+              "opts" => %{}
+            }
+          }
+        )
+
+      {:ok, blob} = Operations.run_analyzer(blob, AshStorage.Test.TestAnalyzer)
+
+      assert blob.analyzers[to_string(AshStorage.Test.TestAnalyzer)] == %{
+               "status" => "complete",
+               "opts" => %{}
+             }
+    end
+
     test "atomically marks analyzer as error on failure" do
       post = create_post!()
 
@@ -78,6 +102,12 @@ defmodule AshStorage.AnalyzerObanTest do
 
       assert updated_blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)]["status"] ==
                "error"
+
+      assert updated_blob.analyzers[to_string(AshStorage.Test.FailingAnalyzer)] == %{
+               "status" => "error",
+               "error" => ":analysis_failed",
+               "opts" => %{}
+             }
     end
 
     test "marks analyzer as skipped when content type not accepted" do

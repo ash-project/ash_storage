@@ -36,6 +36,9 @@ defmodule AshStorage.BlobResource do
   - `:destroy` (destroy)
   - `:update_metadata` (update) - accepts only `:metadata`
   - `:mark_for_purge` (update) - sets `pending_purge` to `true`
+  - `:complete_analysis` (update) - records one analyzer's outcome: its `status`,
+    the metadata it found (`metadata_to_merge`) and, when it failed, the reason
+    as text (`error`)
   - `:purge_blob` (destroy) - destroys the blob's variants and then the record, and
     deletes their files from storage
 

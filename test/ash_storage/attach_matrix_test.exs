@@ -27,8 +27,6 @@ defmodule AshStorage.AttachMatrixTest do
     {:direct_upload, :eager_analyzer} => "#76",
     {:direct_upload, :write_attributes} => "#76",
     {:direct_upload, :failing_analyzer} => "#76",
-    {:action, :analyzer_error_reason} => "#94",
-    {:file_argument, :analyzer_error_reason} => "#94",
     {:direct_upload, :analyzer_error_reason} => "#76",
     {:file_argument, :eager_variant} => "#76",
     {:direct_upload, :eager_variant} => "#76",

@@ -5,7 +5,11 @@ defmodule AshStorage.Pipeline.Analysis do
   # `write_attributes` back to the host record. The attach paths and the
   # background job all go through here.
 
+  require Logger
+
   alias AshStorage.Pipeline.{Owner, Scope, Source, Target}
+
+  @max_error_length 500
 
   @doc """
   Writes a `"pending"` entry for each analyzer of the target's attachment, and
@@ -76,24 +80,35 @@ defmodule AshStorage.Pipeline.Analysis do
   @doc """
   Records an analyzer's outcome on the blob through its `:complete_analysis`
   action: `{:ok, metadata}`, `{:error, reason}`, or `:skipped` for an
-  analyzer that does not accept the blob's content type.
+  analyzer that does not accept the blob's content type. A failure keeps its
+  reason on the entry as text and logs a warning; it does not fail the
+  attach or the job.
   """
   @spec complete(struct(), String.t(), {:ok, map()} | {:error, term()} | :skipped, Scope.t()) ::
           {:ok, struct()} | {:error, term()}
   def complete(blob, analyzer_key, outcome, %Scope{} = scope) do
-    {status, metadata} =
+    params =
       case outcome do
-        {:ok, result} -> {"complete", result}
-        {:error, _reason} -> {"error", %{}}
-        :skipped -> {"skipped", %{}}
+        {:ok, result} ->
+          %{status: "complete", metadata_to_merge: result}
+
+        {:error, reason} ->
+          Logger.warning("AshStorage analyzer #{analyzer_key} failed on blob #{blob.id}")
+          %{status: "error", metadata_to_merge: %{}, error: error_text(reason)}
+
+        :skipped ->
+          %{status: "skipped", metadata_to_merge: %{}}
       end
 
     Ash.update(
       blob,
-      %{analyzer_key: analyzer_key, status: status, metadata_to_merge: metadata},
+      Map.put(params, :analyzer_key, analyzer_key),
       Scope.to_opts(scope, action: :complete_analysis)
     )
   end
+
+  defp error_text(reason) when is_binary(reason), do: String.slice(reason, 0, @max_error_length)
+  defp error_text(reason), do: reason |> inspect() |> String.slice(0, @max_error_length)
 
   @doc """
   Runs one pending analyzer on a stored blob: downloads the file, records the
