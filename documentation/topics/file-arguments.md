@@ -65,7 +65,9 @@ When the argument is `nil`, the change is skipped and no file is attached.
 
 **Before action:** Uploads the file to storage, creates the blob record, runs eager analyzers, and applies any `write_attributes` to the changeset via `force_change_attributes`. This means analyzer-derived attributes are set in the same database write as the parent record — no extra update query.
 
-**After action:** Creates the attachment record linking the blob to the now-persisted parent record. For `has_one_attached` on update actions, replaces any existing attachment (purging the old file). Triggers oban analyzers if configured.
+**After action:** Creates the attachment record linking the blob to the now-persisted parent record. For `has_one_attached`, replaces any existing attachment, on create actions as well as on updates, so an upsert keeps one attachment row; the old file is deleted once the transaction has committed. Generates the attachment's eager variants, records its `generate: :oban` variants, and enqueues the jobs for those variants and for `analyze: :oban` analyzers.
+
+The same steps run for the generated `attach_<name>` action, so a file attached through an argument gets everything the attachment declares.
 
 ## Filename and content type
 

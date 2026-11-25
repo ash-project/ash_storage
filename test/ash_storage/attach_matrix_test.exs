@@ -24,21 +24,6 @@ defmodule AshStorage.AttachMatrixTest do
   # Cells that fail today, with the issue that explains them. A listed cell
   # fails the suite once it passes.
   @gaps %{
-    {:direct_upload, :eager_analyzer} => "#76",
-    {:direct_upload, :write_attributes} => "#76",
-    {:direct_upload, :failing_analyzer} => "#76",
-    {:action, :analyzer_error_reason} => "#94",
-    {:file_argument, :analyzer_error_reason} => "#94",
-    {:direct_upload, :analyzer_error_reason} => "#76",
-    {:file_argument, :eager_variant} => "#76",
-    {:direct_upload, :eager_variant} => "#76",
-    {:file_argument, :upsert_replaces} => "#76",
-    {:file_argument, :scoped_eager_variant} => "#75, #76",
-    {:direct_upload, :scoped_eager_variant} => "#76",
-    {:file_argument, :failed_variant_keeps_old_file} => "#76",
-    {:direct_upload, :failed_variant_keeps_old_file} => "#76",
-    {:action, :raw_plug_upload} => "#103",
-    {:direct_upload, :refuses_unattachable_blob} => "#67",
     {:direct_upload, :refuses_foreign_blob} => "#67"
   }
 

@@ -64,6 +64,25 @@ post.cover_image.blob.metadata
 
 If multiple analyzers return overlapping keys, later results overwrite earlier ones in the metadata map.
 
+## When an analyzer fails
+
+An analyzer that returns `{:error, reason}` gets `"status" => "error"` in the blob's `analyzers`
+map, and `"error"` holds the reason as text: a string as it is, any other term as `inspect/1`
+shows it, cut to 500 characters. A warning is logged with the analyzer and the blob's id. When
+the analyzer runs again on the blob and does not fail, its `"error"` is removed.
+
+```elixir
+post.cover_image.blob.analyzers
+#=> %{
+#   "MyApp.ImageDimensions" => %{"status" => "error", "error" => ":unsupported_format", "opts" => %{}}
+# }
+```
+
+The failure is the analyzer's answer, not an error of the attach: the attach succeeds, the other
+analyzers still run, and an `analyze: :oban` analyzer's job completes and is not retried. An
+analyzer that raises is different: the exception fails the attach, or fails the job, which Oban
+then retries.
+
 ## Writing results to parent attributes
 
 Use `write_attributes` to map analyzer result keys to attributes on the parent record:

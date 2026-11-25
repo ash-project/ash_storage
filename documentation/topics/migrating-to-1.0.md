@@ -308,3 +308,54 @@ the file is still deleted before the action returns.
 What to do: nothing, for most applications. Watch the logs for the warning if
 you need to know about objects left behind. An application that attaches one
 blob to several records should know that purging one of them keeps the file.
+
+## File arguments run the whole attachment declaration
+
+What changed: the change that attaches a file from an action argument runs
+the same steps as the generated `attach_<name>` action. A file attached
+through a file argument now gets the attachment's eager variants, has its `generate: :oban` variants
+recorded and enqueued, and sets `pending_analyzers` for `analyze: :oban`
+analyzers, so their job runs instead of being cancelled. An existing
+`has_one_attached` file is replaced on create actions too, not only on
+updates.
+
+Who this affects: attachments with variants or `analyze: :oban` analyzers that
+are written through a file argument. They start getting them; blobs attached
+before the upgrade are not back-filled. Upsert actions with a file argument:
+each call used to add an attachment row next to the existing one, and now
+replaces it. Duplicate rows left by earlier upserts stay until the next
+replacement, which removes them.
+
+What to do: nothing. To back-fill variants or background analysis for files
+attached before the upgrade, attach them again, or generate the variants and
+run the analyzers yourself.
+
+## Direct uploads run analyzers and variants
+
+What changed: attaching a directly uploaded blob through
+`AshStorage.Changes.AttachBlob` runs the attachment's analyzers and variants,
+as the other ways of attaching a file do. Eager analyzers run in the action
+and write their `write_attributes` with the record, eager variants are
+generated, and `analyze: :oban` analyzers and `generate: :oban` variants are
+recorded and enqueued. Before, a directly uploaded file got none of them.
+
+The eager steps need the file's bytes, which the server never had, so the
+action downloads the object from the service: once for all eager analyzers,
+when one of them accepts the content type, and once more for each eager
+variant, inside the action and its transaction.
+
+The blob is also confirmed before the record is written, not after: an unknown
+blob id or a checksum mismatch now fails the action before anything is saved.
+A blob that is a variant of another blob, or that is marked for purge, is
+refused with `:blob_not_found`.
+
+Who this affects: every attachment that is written through a direct upload and
+declares analyzers or variants. Analyzers are eager unless declared otherwise,
+so an attachment with an analyzer and no `analyze: :oban` now downloads every
+directly uploaded file during the action. Code that expected a record to be
+created even when its blob id was wrong, on a data layer without transactions,
+no longer gets that record.
+
+What to do: review each attachment used with direct uploads. For large files
+declare `analyze: :oban` on its analyzers and `generate: :oban` on its
+variants, or leave variants on demand.

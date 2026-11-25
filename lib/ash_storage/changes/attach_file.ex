@@ -42,7 +42,7 @@ defmodule AshStorage.Changes.AttachFile do
           {:ok, record}
 
         %Ash.Type.File{} = file ->
-          {filename, content_type} = extract_file_metadata(file)
+          {filename, content_type} = AshStorage.Pipeline.Source.name_and_type(file)
           context_opts = Ash.Context.to_opts(context)
 
           attach_opts =
@@ -77,7 +77,7 @@ defmodule AshStorage.Changes.AttachFile do
     attach_items =
       Enum.map(to_attach, fn {{changeset, result}, _idx} ->
         file = Ash.Changeset.get_argument(changeset, argument)
-        {filename, content_type} = extract_file_metadata(file)
+        {filename, content_type} = AshStorage.Pipeline.Source.name_and_type(file)
 
         attach_opts =
           Keyword.merge(context_opts, filename: filename, content_type: content_type)
@@ -118,31 +118,5 @@ defmodule AshStorage.Changes.AttachFile do
   @impl true
   def atomic(changeset, opts, context) do
     {:ok, change(changeset, opts, context)}
-  end
-
-  defp extract_file_metadata(%Ash.Type.File{} = file) do
-    {file_filename(file), file_content_type(file)}
-  end
-
-  defp file_filename(%Ash.Type.File{} = file) do
-    if function_exported?(Ash.Type.File, :filename, 1) do
-      case Ash.Type.File.filename(file) do
-        {:ok, name} -> name
-        _ -> "upload"
-      end
-    else
-      "upload"
-    end
-  end
-
-  defp file_content_type(%Ash.Type.File{} = file) do
-    if function_exported?(Ash.Type.File, :content_type, 1) do
-      case Ash.Type.File.content_type(file) do
-        {:ok, type} -> type
-        _ -> "application/octet-stream"
-      end
-    else
-      "application/octet-stream"
-    end
   end
 end
