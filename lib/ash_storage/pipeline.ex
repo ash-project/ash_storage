@@ -303,7 +303,7 @@ defmodule AshStorage.Pipeline do
 
     target.attachment_resource
     |> Ash.Query.filter(^filter)
-    |> Ash.Query.load(:blob)
+    |> Ash.Query.load(blob: Scope.related(scope, target.blob_resource))
     |> Ash.read(Scope.to_opts(scope))
   end
 

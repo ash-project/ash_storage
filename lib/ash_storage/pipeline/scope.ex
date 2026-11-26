@@ -89,16 +89,38 @@ defmodule AshStorage.Pipeline.Scope do
   def put_new_tenant(%__MODULE__{} = scope, _tenant), do: scope
 
   @doc """
-  Options for `Ash.read/2`, `Ash.create/3` and the like. `actor` and `tenant`
-  are always present; the other fields only when set.
+  Options for `Ash.read/2`, `Ash.create/3` and the like. `actor`, `tenant`
+  and `context` are always present; `authorize?` and `tracer` only when set.
+  The context marks the call as the library's own (see `context/1`).
   """
   @spec to_opts(t(), keyword()) :: keyword()
   def to_opts(%__MODULE__{} = scope, extra \\ []) do
-    [actor: scope.actor, tenant: scope.tenant]
+    [actor: scope.actor, tenant: scope.tenant, context: context(scope)]
     |> put_set(:authorize?, scope.authorize?)
     |> put_set(:tracer, scope.tracer)
-    |> put_set(:context, scope.context)
     |> Keyword.merge(extra)
+  end
+
+  @doc """
+  The context of every call the library makes for itself: the caller's shared
+  context, and the private marker `AshStorage.Checks.AshStorageInteraction`
+  matches. Ash passes only shared context on to nested calls, so the marker
+  does not reach what an action on a blob or attachment resource calls in turn.
+  """
+  @spec context(t()) :: map()
+  def context(%__MODULE__{context: context}) do
+    context = context || %{}
+    Map.put(context, :private, Map.put(context[:private] || %{}, :ash_storage?, true))
+  end
+
+  @doc """
+  A query for a relationship the library loads for itself. A relationship load
+  does not take on the context of the record or query it hangs from, so it is
+  marked here.
+  """
+  @spec related(t(), Ash.Resource.t()) :: Ash.Query.t()
+  def related(%__MODULE__{} = scope, resource) do
+    resource |> Ash.Query.new() |> Ash.Query.set_context(context(scope))
   end
 
   defp put_set(opts, _key, nil), do: opts

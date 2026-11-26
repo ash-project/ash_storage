@@ -37,9 +37,9 @@ defmodule AshStorage.Pipeline.ScopeTest do
       assert Scope.to_opts(scope) == [
                actor: %{id: "actor"},
                tenant: "org_1",
+               context: %{shared: %{locale: "en"}, private: %{ash_storage?: true}},
                authorize?: false,
-               tracer: [Ash.Tracer.Simple],
-               context: %{shared: %{locale: "en"}}
+               tracer: [Ash.Tracer.Simple]
              ]
     end
 
@@ -102,16 +102,51 @@ defmodule AshStorage.Pipeline.ScopeTest do
   end
 
   describe "to_opts/2" do
+    @marked %{private: %{ash_storage?: true}}
+
     test "merges the extra options" do
       assert Scope.to_opts(%Scope{actor: :me}, action: :create) ==
-               [actor: :me, tenant: nil, action: :create]
+               [actor: :me, tenant: nil, context: @marked, action: :create]
     end
 
-    test "leaves out unset authorize?, tracer and context" do
+    test "leaves out unset authorize? and tracer" do
       opts = Scope.to_opts(%Scope{})
 
-      assert opts == [actor: nil, tenant: nil]
+      assert opts == [actor: nil, tenant: nil, context: @marked]
       refute Keyword.has_key?(opts, :authorize?)
     end
+
+    test "keeps the marker with every extra the library passes" do
+      scope = %Scope{actor: :me, context: %{shared: %{locale: "en"}}}
+
+      for extra <- [
+            [action: :complete_analysis],
+            [action: :create],
+            [action: :create_variant],
+            [action: :destroy, return_destroyed?: true],
+            [action: :mark_for_purge, return_record?: true],
+            [action: :update_metadata],
+            []
+          ] do
+        assert Scope.to_opts(scope, extra)[:context] == %{
+                 shared: %{locale: "en"},
+                 private: %{ash_storage?: true}
+               }
+      end
+    end
+
+    test "keeps the caller's private context next to the marker" do
+      scope = %Scope{context: %{private: %{other: 1}}}
+
+      assert Scope.context(scope) == %{private: %{other: 1, ash_storage?: true}}
+    end
+  end
+
+  test "related/2 builds a query that carries the marker" do
+    query = Scope.related(%Scope{context: %{shared: %{a: 1}}}, AshStorage.Test.Blob)
+
+    assert query.resource == AshStorage.Test.Blob
+    assert query.context.private.ash_storage? == true
+    assert query.context.shared == %{a: 1}
   end
 end
