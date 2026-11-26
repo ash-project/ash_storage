@@ -12,15 +12,18 @@ defmodule AshStorage.Pipeline.Purge do
   @type deletion :: {module(), AshStorage.Service.Context.t(), String.t()}
 
   @doc """
-  Whether a row of the target's attachment resource that `scope` may read
-  still references `blob`.
+  Whether any row of the target's attachment resource in the scope's tenant
+  still references `blob`, whether or not the caller may read it.
   """
   @spec referenced?(struct(), Target.t(), Scope.t()) :: {:ok, boolean()} | {:error, term()}
   def referenced?(blob, %Target{} = target, %Scope{} = scope) do
     target.attachment_resource
     |> Ash.Query.filter(blob_id == ^blob.id)
     |> Ash.Query.limit(1)
-    |> Ash.read(Scope.to_opts(scope))
+    # The answer decides whether the blob is deleted and never reaches the
+    # caller. A read policy that hid another record's row would make the
+    # library delete a blob that row still points at.
+    |> Ash.read(Scope.to_opts(scope, authorize?: false))
     |> case do
       {:ok, rows} -> {:ok, rows != []}
       {:error, _} = error -> error
