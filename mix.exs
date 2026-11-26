@@ -159,7 +159,7 @@ defmodule AshStorage.MixProject do
 
   defp deps do
     [
-      {:ash, ash_version("~> 3.5")},
+      {:ash, ash_version("~> 3.5 and >= 3.5.27")},
       {:spark, "~> 2.2 and >= 2.2.10"},
       {:igniter, "~> 0.5", optional: true},
       {:jason, "~> 1.2"},
