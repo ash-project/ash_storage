@@ -243,7 +243,7 @@ defmodule AshStorage.MultitenancyTest do
   describe "on-demand variant URL with tenant" do
     test "generates the variant in the tenant and returns its URL" do
       tenant = Ash.UUID.generate()
-      post = Ash.create!(AshStorage.Test.TenantMatrixPost, %{}, tenant: tenant)
+      post = Ash.create!(AshStorage.Test.Matrix.Context.Post, %{slug: "lazy"}, tenant: tenant)
 
       {:ok, _} =
         Operations.attach(post, :lazy, "hello",
