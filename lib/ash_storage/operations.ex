@@ -26,6 +26,13 @@ defmodule AshStorage.Operations do
   For `has_one_attached`, any existing attachment is replaced.
   For `has_many_attached`, the new attachment is appended.
 
+  It runs the `attach_<name>` update action, with everything that action
+  carries: its policies, changes, validations, notifications and update
+  timestamp. To attach as part of another action, call it from that action's
+  `after_action` hook and return the record from its result, which carries the
+  analyzers' `write_attributes`; the "Migrating to 1.0" guide shows how. To
+  attach within the action itself, use `AshStorage.Changes.Builtins.attach_file/2`.
+
   ## Options
 
   - `:filename` - (required) the original filename

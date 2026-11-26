@@ -30,36 +30,35 @@ defmodule AshStorage.Test.Post do
       accept [:title]
       argument :cover_image, :file, allow_nil?: true
 
-      change {AshStorage.Changes.AttachFile, argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
 
     update :update_cover_image do
+      require_atomic? false
       argument :cover_image, :file, allow_nil?: true
 
-      change {AshStorage.Changes.AttachFile, argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
 
     create :create_with_blob do
       accept [:title]
       argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob,
-              argument: :cover_image_blob_id, attachment: :cover_image}
+      change attach_blob(:cover_image, argument: :cover_image_blob_id)
     end
 
     update :attach_blob do
       require_atomic? false
       argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob,
-              argument: :cover_image_blob_id, attachment: :cover_image}
+      change attach_blob(:cover_image, argument: :cover_image_blob_id)
     end
 
     update :attach_document_blob do
       require_atomic? false
       argument :document_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob, argument: :document_blob_id, attachment: :documents}
+      change attach_blob(:documents, argument: :document_blob_id)
     end
   end
 end

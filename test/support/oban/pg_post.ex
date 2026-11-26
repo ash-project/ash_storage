@@ -46,14 +46,14 @@ defmodule AshStorage.Test.PgPost do
         require_atomic? false
         argument name, :file, allow_nil?: true
 
-        change {AshStorage.Changes.HandleFileArgument, argument: name, attachment: name}
+        change attach_file(name)
       end
 
       update :"update_#{name}_blob" do
         require_atomic? false
         argument :"#{name}_blob_id", :uuid, allow_nil?: true
 
-        change {AshStorage.Changes.AttachBlob, argument: :"#{name}_blob_id", attachment: name}
+        change attach_blob(name, argument: :"#{name}_blob_id")
       end
     end
   end

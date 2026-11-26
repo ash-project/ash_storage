@@ -69,7 +69,7 @@ defmodule AshStorage.Test.MatrixPost do
       accept [:slug]
       argument :doc, :file, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument, argument: :doc, attachment: :doc}
+      change attach_file(:doc)
     end
 
     create :upsert_with_doc do
@@ -78,7 +78,7 @@ defmodule AshStorage.Test.MatrixPost do
       upsert_identity :unique_slug
       argument :doc, :file, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument, argument: :doc, attachment: :doc}
+      change attach_file(:doc)
     end
 
     for name <- [:doc, :files, :fragile, :plain] do
@@ -86,7 +86,7 @@ defmodule AshStorage.Test.MatrixPost do
         require_atomic? false
         argument name, :file, allow_nil?: true
 
-        change {AshStorage.Changes.HandleFileArgument, argument: name, attachment: name}
+        change attach_file(name)
       end
     end
 
@@ -94,7 +94,7 @@ defmodule AshStorage.Test.MatrixPost do
       accept [:slug]
       argument :doc_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob, argument: :doc_blob_id, attachment: :doc}
+      change attach_blob(:doc, argument: :doc_blob_id)
     end
 
     create :upsert_with_doc_blob do
@@ -103,7 +103,7 @@ defmodule AshStorage.Test.MatrixPost do
       upsert_identity :unique_slug
       argument :doc_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob, argument: :doc_blob_id, attachment: :doc}
+      change attach_blob(:doc, argument: :doc_blob_id)
     end
 
     for name <- [:doc, :files, :fragile, :plain] do
@@ -111,7 +111,7 @@ defmodule AshStorage.Test.MatrixPost do
         require_atomic? false
         argument :"#{name}_blob_id", :uuid, allow_nil?: true
 
-        change {AshStorage.Changes.AttachBlob, argument: :"#{name}_blob_id", attachment: name}
+        change attach_blob(name, argument: :"#{name}_blob_id")
       end
     end
   end

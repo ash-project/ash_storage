@@ -6,7 +6,7 @@ single source of truth for what is verified, when, and what's still planned.
 
 ## Today's guarantees
 
-### Server-side uploads (`Operations.attach`, `AttachFile`, variants)
+### Server-side uploads (`Operations.attach`, file arguments, variants)
 
 The library computes the body's MD5 locally, sets it on the service context
 as `:expected_md5`, and the service sends it as `Content-MD5` on PUT. If the
@@ -110,9 +110,8 @@ locked in so the implementation can follow it directly.
 
 To avoid materializing the full body just to compute the whole-blob MD5,
 multipart uploads will use `:crypto.hash_init(:md5)` and
-`:crypto.hash_update/2` per chunk. The current `read_io/1` in
-`AshStorage.Changes.Attach` and `AshStorage.Changes.HandleFileArgument`
-materializes everything — this is the biggest refactor multipart will
+`:crypto.hash_update/2` per chunk. Today the attach action and the
+file-argument change read the whole input into memory — this is the biggest refactor multipart will
 require. The `upload/3` callback signature will need a streaming
 variant, or a higher-level wrapper will sit in front of it.
 

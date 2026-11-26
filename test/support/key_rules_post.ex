@@ -59,7 +59,7 @@ defmodule AshStorage.Test.KeyRulesPost do
       accept [:title]
       argument :file, :file, allow_nil?: false
 
-      change {AshStorage.Changes.HandleFileArgument, argument: :file, attachment: :parent}
+      change attach_file(:parent, argument: :file)
     end
   end
 end

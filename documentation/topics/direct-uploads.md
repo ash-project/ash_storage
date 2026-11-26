@@ -62,7 +62,9 @@ Azure-specific checklist:
 - If shared-key access is disabled on the storage account, configure a pre-generated SAS with `:sas_token_env` for now; managed identity / Azure AD user-delegation SAS support is not implemented yet.
 - If you provide a static SAS token via `:sas_token`/`:sas_token_env`, it is reused for every Azure operation. Use a container/account SAS with the needed permissions: read (`r`) for URLs/downloads/existence checks, create/write (`c`, `w`) for uploads/direct uploads, and delete (`d`) for purges.
 
-Add the `AshStorage.Changes.AttachBlob` change to your create or update actions:
+Add an `attach_blob/2` change to your create or update actions. The function is imported into
+every resource that uses the `AshStorage` extension; the argument defaults to the attachment's
+name, so pass `argument:` when the blob id has its own:
 
 ```elixir
 actions do
@@ -70,8 +72,7 @@ actions do
     accept [:title]
     argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-    change {AshStorage.Changes.AttachBlob,
-            argument: :cover_image_blob_id, attachment: :cover_image}
+    change attach_blob(:cover_image, argument: :cover_image_blob_id)
   end
 
   update :update do
@@ -79,8 +80,7 @@ actions do
     require_atomic? false
     argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-    change {AshStorage.Changes.AttachBlob,
-            argument: :cover_image_blob_id, attachment: :cover_image}
+    change attach_blob(:cover_image, argument: :cover_image_blob_id)
   end
 end
 ```
@@ -223,8 +223,7 @@ update :add_document do
   require_atomic? false
   argument :document_blob_id, :uuid, allow_nil?: true
 
-  change {AshStorage.Changes.AttachBlob,
-          argument: :document_blob_id, attachment: :documents}
+  change attach_blob(:documents, argument: :document_blob_id)
 end
 ```
 
@@ -268,8 +267,7 @@ defmodule MyApp.Post do
       accept [:title]
       argument :cover_image_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob,
-              argument: :cover_image_blob_id, attachment: :cover_image}
+      change attach_blob(:cover_image, argument: :cover_image_blob_id)
     end
 
     action :prepare_cover_image_upload, :map do

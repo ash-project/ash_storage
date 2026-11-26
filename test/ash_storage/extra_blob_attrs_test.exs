@@ -42,7 +42,7 @@ defmodule AshStorage.ExtraBlobAttrsTest do
     end
   end
 
-  describe "AttachFile change with extra blob attrs" do
+  describe "attach_file/2 with extra blob attrs" do
     test "create action merges service attrs into blob" do
       path = Path.join(System.tmp_dir!(), "extra_attrs_create.txt")
       File.write!(path, "create test data")

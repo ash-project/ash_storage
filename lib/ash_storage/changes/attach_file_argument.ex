@@ -1,5 +1,6 @@
-defmodule AshStorage.Changes.HandleFileArgument do
+defmodule AshStorage.Changes.AttachFileArgument do
   @moduledoc false
+  # What `AshStorage.Changes.Builtins.attach_file/2` expands to
   use Ash.Resource.Change
 
   alias AshStorage.Pipeline.Hooks

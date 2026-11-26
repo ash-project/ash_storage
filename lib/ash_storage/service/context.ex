@@ -34,8 +34,8 @@ defmodule AshStorage.Service.Context do
 
   ## Lifecycle
 
-  Most callbacks see a Context constructed by the bundled changes
-  (`AshStorage.Changes.Attach`, `HandleFileArgument`, etc.). Custom flows
+  Most callbacks see a Context constructed by the attach action and the
+  file-argument change. Custom flows
   can build one with `new/2` and refine it via `put_expected_md5/2` and
   `put_blob_metadata/2` before invoking a service callback directly.
   """

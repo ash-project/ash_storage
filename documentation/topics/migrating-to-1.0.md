@@ -359,3 +359,165 @@ no longer gets that record.
 What to do: review each attachment used with direct uploads. For large files
 declare `analyze: :oban` on its analyzers and `generate: :oban` on its
 variants, or leave variants on demand.
+
+## Host resources need a single primary key attribute
+
+What changed: attachments find and write their host record by the resource's
+primary key attribute, whatever its name. Before, they always used `:id`. A
+resource that declares attachments and does not have exactly one primary key
+attribute no longer compiles, with a `Spark.Error.DslError` in its `storage`
+section:
+
+```text
+MyApp.Post declares attachments, and AshStorage identifies the record an
+attachment belongs to by a single primary key attribute. The resource's
+primary key is made of :id, :org.
+```
+
+Who this affects:
+
+- Resources with attachments and a composite primary key. If the key included
+  `:id`, records that shared an `:id` also shared their attachments, without
+  any error. Those resources now fail to compile. That includes a key whose
+  `:id` is unique on its own, such as a partitioned table keyed
+  `(id, org_id)`, which worked before.
+- Resources whose single primary key has another name, such as
+  `attribute :slug, :string, primary_key?: true`. With a polymorphic
+  attachment resource they now work; before, they failed to compile with an
+  error about the missing `:id` field. With `belongs_to_resource` on the
+  attachment resource they still do not: the relationship it generates expects
+  `:id` on the host.
+
+What to do: give a resource with attachments a single primary key attribute,
+for example a `uuid_primary_key :id`, and turn the rest of a composite key into
+an identity. When `:id` is unique on its own, as in the partitioned table
+above, declare only `:id` as the Ash primary key (`primary_key?: true`) and
+leave the database's key as it is. If you generate migrations from your
+resources, check the next generated migration before running it: the
+database's key must stay as it is. Attachments written before for a composite key that included
+`:id` are found by that `:id` value, so check whether records shared them.
+
+## `attach_file/2` and `attach_blob/2` are imported into resources
+
+What changed: the `AshStorage` extension imports
+`AshStorage.Changes.Builtins.attach_file/2` and
+`AshStorage.Changes.Builtins.attach_blob/2` into every resource that uses it,
+so actions can write `change attach_file(:cover_image)` and
+`change attach_blob(:cover_image, argument: :cover_image_blob_id)`.
+
+The `change` entries of each create and update action that attach from an
+argument are also checked when the resource compiles. An attachment the
+resource does not declare, or an argument the action does not have, is
+reported as a warning naming the action. If it is left in, an action with a
+wrong attachment fails when it is given a file or blob id and attaches nothing
+when it is not; an action without the argument never attaches anything. With
+`mix compile --warnings-as-errors` the warning fails the build. Changes in
+the resource's `changes` section are not checked.
+
+Who this affects: a resource module that defines its own function named
+`attach_file` or `attach_blob` with one or two arguments and calls it inside
+the module. That call now clashes with the import and the module does not
+compile. Code interface functions with those names are not affected. An action
+whose change tuple names a wrong attachment or argument, or an argument that
+is only set programmatically and not declared on the action, now gets the
+warning.
+
+What to do: rename such a local function. Of the module tuples, only
+`{AshStorage.Changes.AttachBlob, argument: ..., attachment: ...}` keeps
+working; the two for file arguments are removed, see the next section.
+
+## `attach_file/2` replaces `HandleFileArgument` and `AttachFile`
+
+What changed: `AshStorage.Changes.HandleFileArgument` and
+`AshStorage.Changes.AttachFile` are removed. A resource that still names one of
+them in a `change` compiles with a warning that names the action and the
+replacement, and the action raises an `UndefinedFunctionError`, wrapped in an
+Ash error, every time it is called, whether a file is passed or not. Search
+your code for both module names.
+`change attach_file(:cover_image)` is the one way to attach a file from an
+action argument; see `AshStorage.Changes.Builtins.attach_file/2`.
+
+For `HandleFileArgument`, replace the tuple and nothing else:
+
+```elixir
+# before
+change {AshStorage.Changes.HandleFileArgument,
+        argument: :cover_image, attachment: :cover_image}
+
+# after
+change attach_file(:cover_image)
+```
+
+For `AttachFile`, replace the tuple the same way, and read on. `AttachFile`
+attached the file by running the generated `attach_<name>` update action on
+the record once the action had saved it. `attach_file/2` attaches inside the
+action it is used in, and no second action runs. So these stop applying to a
+file argument:
+
+1. policies that match the attach action, by its name or by the action type
+   `:update`;
+2. changes and validations the resource declares for update actions;
+3. notifiers and pub-sub messages for that update;
+4. the update timestamp: `updated_at` was bumped right after a create;
+5. extensions that record updates, such as audit logs.
+
+Also:
+
+- the result now carries `<name>_blob` and `<name>_attachment` metadata;
+- an update action with `attach_file/2` needs `require_atomic? false`;
+- eager analyzers run before the record is written, and their
+  `write_attributes` are part of that write, so a failing upload fails the
+  action before anything is saved.
+
+Who this affects: every resource that uses either module.
+
+What to do: replace the tuple with `attach_file/2`. If you relied on one of
+the five points above, there are two ways out.
+
+- Move the rule to the action that takes the file: a policy on that action,
+  or a change with `where: [present(:cover_image)]`.
+- Keep the second action: call `AshStorage.Operations.attach/4` from an
+  `after_action` hook. It runs the generated `attach_<name>` action with
+  everything it carries:
+
+```elixir
+create :create do
+  accept [:title]
+  argument :cover_image, :file, allow_nil?: true
+
+  change fn changeset, context ->
+    Ash.Changeset.after_action(changeset, fn changeset, record ->
+      case Ash.Changeset.get_argument(changeset, :cover_image) do
+        nil ->
+          {:ok, record}
+
+        file ->
+          filename =
+            case Ash.Type.File.filename(file) do
+              {:ok, filename} -> filename
+              _ -> "upload"
+            end
+
+          content_type =
+            case Ash.Type.File.content_type(file) do
+              {:ok, content_type} -> content_type
+              _ -> "application/octet-stream"
+            end
+
+          opts =
+            Ash.Context.to_opts(context, filename: filename, content_type: content_type)
+
+          with {:ok, %{record: record}} <-
+                 AshStorage.Operations.attach(record, :cover_image, file, opts) do
+            {:ok, record}
+          end
+      end
+    end)
+  end
+end
+```
+
+The hook returns the record from the attach result, so the analyzers'
+`write_attributes` are on what the caller gets back. The attach runs inside
+the outer action's transaction, so a file it replaces is deleted before that
+transaction commits.

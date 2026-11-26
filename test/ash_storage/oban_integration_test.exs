@@ -46,6 +46,32 @@ defmodule AshStorage.ObanIntegrationTest do
     end
   end
 
+  describe "attaching from another action's after_action hook" do
+    test "attaches inside that action's transaction without a warning" do
+      log =
+        capture_log(fn ->
+          post =
+            PgPost
+            |> Ash.Changeset.for_create(:create, %{title: "outer"})
+            |> Ash.Changeset.after_action(fn _changeset, post ->
+              with {:ok, %{record: post}} <-
+                     AshStorage.Operations.attach(post, :cover_image, "inner",
+                       filename: "inner.bin"
+                     ) do
+                {:ok, post}
+              end
+            end)
+            |> Ash.create!()
+
+          send(self(), {:post, post})
+        end)
+
+      assert_received {:post, post}
+      assert log == ""
+      assert Ash.load!(post, cover_image: :blob).cover_image.blob.filename == "inner.bin"
+    end
+  end
+
   describe "purge_blob action" do
     test "deletes file from storage and destroys blob record" do
       post = create_post!()

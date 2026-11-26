@@ -4,7 +4,8 @@ Instead of using `AshStorage.Operations.attach/4` separately, you can add file a
 
 ## Basic setup
 
-Add an argument and a change to your action:
+Add an argument and an `attach_file/2` change to your action. The function is imported into
+every resource that uses the `AshStorage` extension:
 
 ```elixir
 defmodule MyApp.Post do
@@ -23,19 +24,23 @@ defmodule MyApp.Post do
       accept [:title]
       argument :cover_image, Ash.Type.File, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument,
-              argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
 
     update :update do
+      require_atomic? false
       argument :cover_image, Ash.Type.File, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument,
-              argument: :cover_image, attachment: :cover_image}
+      change attach_file(:cover_image)
     end
   end
 end
 ```
+
+The argument defaults to the attachment's name; pass `argument:` when they differ, as in
+`change attach_file(:cover_image, argument: :upload)`. The update action needs
+`require_atomic? false` because the file is uploaded before the record is written, which an
+atomic update cannot do.
 
 Then use it:
 
@@ -61,7 +66,7 @@ When the argument is `nil`, the change is skipped and no file is attached.
 
 ## How it works
 
-`AshStorage.Changes.HandleFileArgument` runs in two phases:
+`attach_file/2` runs in two phases:
 
 **Before action:** Uploads the file to storage, creates the blob record, runs eager analyzers, and applies any `write_attributes` to the changeset via `force_change_attributes`. This means analyzer-derived attributes are set in the same database write as the parent record — no extra update query.
 
@@ -80,29 +85,6 @@ The change extracts filename and content type from the `Ash.Type.File` source wh
 When the source doesn't provide a value, the defaults are `"upload"` for filename and `"application/octet-stream"` for content type.
 
 > **Note:** Full filename/content_type extraction requires Ash version with the `Ash.Type.File.filename/1` and `Ash.Type.File.content_type/1` callbacks. On older Ash versions, the defaults are used. This is handled gracefully at runtime.
-
-## Alternative: `AshStorage.Changes.AttachFile`
-
-There is also a simpler `AttachFile` change that calls `AshStorage.Operations.attach/4` in an `after_action` hook:
-
-```elixir
-create :create do
-  argument :cover_image, :file, allow_nil?: true
-
-  change {AshStorage.Changes.AttachFile,
-          argument: :cover_image, attachment: :cover_image}
-end
-```
-
-The difference from `HandleFileArgument`:
-
-| | `HandleFileArgument` | `AttachFile` |
-|---|---|---|
-| `write_attributes` | Supported (applied in before_action) | Not supported |
-| Eager analyzers | Run in before_action, attributes set atomically | Run via `Operations.attach` after record is saved |
-| Argument type | `Ash.Type.File` | `:file` |
-
-Use `HandleFileArgument` when you need `write_attributes` or want the tightest integration. Use `AttachFile` for simpler cases.
 
 ## Direct uploads with `Operations.attach/4`
 

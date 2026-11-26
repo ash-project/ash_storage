@@ -90,13 +90,13 @@ defmodule AshStorage.Test.TenantMatrixPost do
     create :create_with_doc do
       argument :doc, :file, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument, argument: :doc, attachment: :doc}
+      change attach_file(:doc)
     end
 
     create :create_with_doc_blob do
       argument :doc_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob, argument: :doc_blob_id, attachment: :doc}
+      change attach_blob(:doc, argument: :doc_blob_id)
     end
 
     for name <- [:doc, :eager] do
@@ -104,14 +104,14 @@ defmodule AshStorage.Test.TenantMatrixPost do
         require_atomic? false
         argument name, :file, allow_nil?: true
 
-        change {AshStorage.Changes.HandleFileArgument, argument: name, attachment: name}
+        change attach_file(name)
       end
 
       update :"update_#{name}_blob" do
         require_atomic? false
         argument :"#{name}_blob_id", :uuid, allow_nil?: true
 
-        change {AshStorage.Changes.AttachBlob, argument: :"#{name}_blob_id", attachment: name}
+        change attach_blob(name, argument: :"#{name}_blob_id")
       end
     end
   end
@@ -208,13 +208,13 @@ defmodule AshStorage.Test.PolicyMatrixPost do
     create :create_with_doc do
       argument :doc, :file, allow_nil?: true
 
-      change {AshStorage.Changes.HandleFileArgument, argument: :doc, attachment: :doc}
+      change attach_file(:doc)
     end
 
     create :create_with_doc_blob do
       argument :doc_blob_id, :uuid, allow_nil?: true
 
-      change {AshStorage.Changes.AttachBlob, argument: :doc_blob_id, attachment: :doc}
+      change attach_blob(:doc, argument: :doc_blob_id)
     end
 
     for name <- [:doc, :eager] do
@@ -222,14 +222,14 @@ defmodule AshStorage.Test.PolicyMatrixPost do
         require_atomic? false
         argument name, :file, allow_nil?: true
 
-        change {AshStorage.Changes.HandleFileArgument, argument: name, attachment: name}
+        change attach_file(name)
       end
 
       update :"update_#{name}_blob" do
         require_atomic? false
         argument :"#{name}_blob_id", :uuid, allow_nil?: true
 
-        change {AshStorage.Changes.AttachBlob, argument: :"#{name}_blob_id", attachment: name}
+        change attach_blob(name, argument: :"#{name}_blob_id")
       end
     end
   end
