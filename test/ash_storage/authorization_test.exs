@@ -268,6 +268,77 @@ defmodule AshStorage.AuthorizationTest do
     end
   end
 
+  # Attachment rows that only their post's owner may read
+  defmodule OwnedAttachment do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshStorage.AuthorizationTest.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      authorizers: [Ash.Policy.Authorizer],
+      extensions: [AshStorage.AttachmentResource]
+
+    ets do
+      private? true
+    end
+
+    attachment do
+      blob_resource(AshStorage.Test.Blob)
+      belongs_to_resource(:post, AshStorage.AuthorizationTest.OwnedPost)
+    end
+
+    policies do
+      policy action_type(:read) do
+        authorize_if expr(post.owner == ^actor(:id))
+      end
+
+      policy action_type([:create, :destroy]) do
+        authorize_if actor_present()
+      end
+    end
+
+    attributes do
+      uuid_primary_key :id
+    end
+  end
+
+  defmodule OwnedPost do
+    @moduledoc false
+    use Ash.Resource,
+      domain: AshStorage.AuthorizationTest.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [AshStorage]
+
+    ets do
+      private? true
+    end
+
+    storage do
+      service({AshStorage.Service.Test, []})
+      blob_resource(AshStorage.Test.Blob)
+      attachment_resource(AshStorage.AuthorizationTest.OwnedAttachment)
+
+      has_one_attached :cover do
+        variant(:upper, AshStorage.Test.UppercaseVariant, generate: :eager)
+      end
+    end
+
+    attributes do
+      uuid_primary_key :id
+      attribute :owner, :string, allow_nil?: false, public?: true
+    end
+
+    actions do
+      defaults [:read, create: [:owner]]
+
+      update :update_cover_blob do
+        require_atomic? false
+        argument :cover_blob_id, :uuid, allow_nil?: true
+
+        change attach_blob(:cover, argument: :cover_blob_id)
+      end
+    end
+  end
+
   setup do
     Store.reset!()
 
@@ -488,6 +559,73 @@ defmodule AshStorage.AuthorizationTest do
         Operations.attach(post, :cover, "one", filename: "cover.txt", actor: @actor)
 
       assert_received {:probe, {:error, %Ash.Error.Forbidden{}}}
+    end
+  end
+
+  describe "when another owner's rows are hidden from the caller" do
+    setup do
+      alice = %{id: "alice"}
+      bob = %{id: "bob"}
+
+      %{
+        alice: alice,
+        bob: bob,
+        hers: Ash.create!(OwnedPost, %{owner: "alice"}, actor: alice),
+        his: Ash.create!(OwnedPost, %{owner: "bob"}, actor: bob)
+      }
+    end
+
+    test "her purge keeps a blob his record still uses", ctx do
+      {:ok, %{blob: shared}} =
+        Operations.attach(ctx.hers, :cover, "shared", filename: "s.bin", actor: ctx.alice)
+
+      ctx.his
+      |> Ash.Changeset.for_update(:update_cover_blob, %{cover_blob_id: shared.id}, actor: ctx.bob)
+      |> Ash.update!()
+
+      assert {:ok, [_]} = Operations.purge(ctx.hers, :cover, actor: ctx.alice)
+
+      assert {:ok, _} = Ash.get(AshStorage.Test.Blob, shared.id)
+      assert Store.exists?(shared.key)
+      assert Ash.load!(ctx.his, [cover: :blob], actor: ctx.bob).cover.blob.id == shared.id
+    end
+
+    test "a replacement of her file keeps a blob his record still uses", ctx do
+      {:ok, %{blob: shared}} =
+        Operations.attach(ctx.hers, :cover, "shared", filename: "s.bin", actor: ctx.alice)
+
+      ctx.his
+      |> Ash.Changeset.for_update(:update_cover_blob, %{cover_blob_id: shared.id}, actor: ctx.bob)
+      |> Ash.update!()
+
+      assert {:ok, _} =
+               Operations.attach(ctx.hers, :cover, "new", filename: "n.bin", actor: ctx.alice)
+
+      assert {:ok, _} = Ash.get(AshStorage.Test.Blob, shared.id)
+      assert Store.exists?(shared.key)
+      assert Ash.load!(ctx.his, [cover: :blob], actor: ctx.bob).cover.blob.id == shared.id
+    end
+
+    test "her purge keeps a variant his record uses", ctx do
+      {:ok, %{blob: source}} =
+        Operations.attach(ctx.hers, :cover, "shout",
+          filename: "s.txt",
+          content_type: "text/plain",
+          actor: ctx.alice
+        )
+
+      [variant] = Ash.load!(source, :variants).variants
+
+      Ash.create!(
+        OwnedAttachment,
+        %{name: "cover", post_id: ctx.his.id, blob_id: variant.id},
+        authorize?: false
+      )
+
+      assert {:ok, [_]} = Operations.purge(ctx.hers, :cover, actor: ctx.alice)
+
+      assert {:ok, _} = Ash.get(AshStorage.Test.Blob, variant.id)
+      assert Store.exists?(variant.key)
     end
   end
 

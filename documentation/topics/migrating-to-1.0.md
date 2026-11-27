@@ -290,7 +290,8 @@ removes the old file the same way `purge_<name>` does.
   foreign keys the variant rows and files were left behind.
 - `purge_<name>`, a replacement and the `dependent` option remove a blob only
   when no other attachment row references it. The `:purge_blob` action does
-  not check: it removes the blob it is given.
+  not check: it removes the blob it is given. The check counts every row in
+  the caller's tenant, also rows the caller's read policies would hide.
 - `purge_<name>` and a replacement delete the files after the transaction
   commits, as the `dependent` option already did. A failure later in the same
   action no longer leaves rows that point at deleted files. Inside a
