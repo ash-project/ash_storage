@@ -83,6 +83,11 @@ defmodule AshStorage.Operations do
   When the key breaks the rules in `AshStorage.Key`, the result is
   `{:error, {:invalid_storage_key, reason, key}}` and no blob is created.
 
+  There is no host record and no host action to authorize the upload, so the
+  blob is created as one of the library's own calls, which
+  `AshStorage.Checks.AshStorageInteraction` matches. Authorize the caller
+  before you call this function.
+
   ## Options
 
   - `:filename` - (required) the original filename
@@ -98,10 +103,11 @@ defmodule AshStorage.Operations do
     options above; options given explicitly win over the scope's
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
+    scope = Scope.from_opts(opts)
+
     with {:ok, target} <- resolve_for_direct_upload(resource, attachment_name),
-         {:ok, {service_mod, ctx}} <- Target.service_context(target, Scope.from_opts(opts)) do
-      {arg_opts, action_opts} =
-        Keyword.split(opts, [:filename, :content_type, :byte_size, :checksum, :metadata])
+         {:ok, {service_mod, ctx}} <- Target.service_context(target, scope) do
+      arg_opts = Keyword.take(opts, [:filename, :content_type, :byte_size, :checksum, :metadata])
 
       filename = Keyword.fetch!(arg_opts, :filename)
       content_type = Keyword.get(arg_opts, :content_type, "application/octet-stream")
@@ -123,7 +129,9 @@ defmodule AshStorage.Operations do
                  service_opts: Target.persistable_service_opts(service_mod, ctx.service_opts),
                  metadata: metadata
                },
-               Keyword.merge(action_opts, action: :create)
+               # No host action authorizes this, so the blob is created as one
+               # of the library's own calls; the caller authorizes beforehand
+               Scope.to_opts(scope, action: :create)
              ),
            {:ok, upload_info} <- service_mod.direct_upload(key, ctx) do
         {:ok, Map.put(upload_info, :blob, blob)}

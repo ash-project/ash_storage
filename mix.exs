@@ -124,6 +124,9 @@ defmodule AshStorage.MixProject do
           AshStorage.Key,
           AshStorage.Token
         ],
+        Checks: [
+          AshStorage.Checks.AshStorageInteraction
+        ],
         Introspection: [
           AshStorage.Info,
           AshStorage.AttachmentDefinition,

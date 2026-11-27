@@ -9,8 +9,10 @@ defmodule AshStorage.Test.MatrixResources do
   #
   #   * `:multitenancy` - `nil`, `:context`, or `:attribute` (on `:org_id`, on
   #     all three resources)
-  #   * `:policies` - `nil`, or `:actor` for `authorize_if actor_present()` on
-  #     the blob and the attachment resource
+  #   * `:policies` - `nil`; `:actor` for `authorize_if actor_present()` on
+  #     the blob and the attachment resource; or `:deny`, where the blob and
+  #     the attachment resource allow nothing but AshStorage's own calls and
+  #     the host requires an actor
 
   defmacro __using__(opts) do
     parent = __CALLER__.module
@@ -25,6 +27,8 @@ defmodule AshStorage.Test.MatrixResources do
     org_id = org_id(multitenancy)
     storage_policies = storage_policies(policies)
     storage_authorizers = if policies, do: [Ash.Policy.Authorizer], else: []
+    host_policies = host_policies(policies)
+    host_authorizers = if policies == :deny, do: [Ash.Policy.Authorizer], else: []
 
     quote do
       defmodule unquote(blob) do
@@ -82,6 +86,7 @@ defmodule AshStorage.Test.MatrixResources do
         use Ash.Resource,
           domain: AshStorage.Test.Domain,
           data_layer: Ash.DataLayer.Ets,
+          authorizers: unquote(host_authorizers),
           extensions: [AshStorage]
 
         ets do
@@ -89,6 +94,7 @@ defmodule AshStorage.Test.MatrixResources do
         end
 
         unquote(tenancy)
+        unquote(host_policies)
 
         storage do
           service({AshStorage.Service.Test, []})
@@ -213,6 +219,16 @@ defmodule AshStorage.Test.MatrixResources do
 
   defp storage_policies(nil), do: nil
 
+  defp storage_policies(:deny) do
+    quote do
+      policies do
+        bypass AshStorage.Checks.AshStorageInteraction do
+          authorize_if always()
+        end
+      end
+    end
+  end
+
   defp storage_policies(:actor) do
     quote do
       policies do
@@ -222,4 +238,16 @@ defmodule AshStorage.Test.MatrixResources do
       end
     end
   end
+
+  defp host_policies(:deny) do
+    quote do
+      policies do
+        policy always() do
+          authorize_if actor_present()
+        end
+      end
+    end
+  end
+
+  defp host_policies(_policies), do: nil
 end

@@ -542,3 +542,55 @@ Ash. Nothing else changes for code that works today.
 
 What to do: update Ash to 3.5.27 or later if you are on an older 3.5. Pass
 `scope:` instead of `actor:` and `tenant:` if you prefer.
+
+## Policies on blob and attachment resources
+
+What changed: the calls AshStorage makes for itself still carry the caller's
+actor, tenant and `authorize?`, and now also the private context
+`%{ash_storage?: true}`. They are its calls to blob and attachment rows:
+storing, analyzing, linking, replacing and purging a file, generating
+variants, and the background jobs. Two more carry it:
+
+- an analyzer job that writes its `write_attributes` reads and updates the
+  host record as a marked call;
+- a read that generates a variant on demand, for its URL, creates that
+  variant's blob as a marked call, for whoever reads the host record.
+
+The marker is never on the caller's call to a host action, such as
+`attach_<name>`. The new policy check `AshStorage.Checks.AshStorageInteraction`
+matches it, so a blob or attachment resource can allow the library's calls
+with a bypass and deny everything else:
+
+```elixir
+policies do
+  bypass AshStorage.Checks.AshStorageInteraction do
+    authorize_if always()
+  end
+end
+```
+
+Who this affects: nobody who does not use the check. The marker is in the
+private context, which a policy only sees when it asks for it, and Ash does not
+pass private context on to nested calls.
+
+What to do: nothing. To lock the blob and attachment resources down to the
+library, add the bypass. A host resource that adds it allows the analyzer
+job's write-back too.
+
+## `prepare_direct_upload/3` creates its blob as one of the library's calls
+
+What changed: `AshStorage.Operations.prepare_direct_upload/3` creates the blob
+with the caller's actor, tenant, `authorize?`, tracer and context (directly or
+through `scope:`) and the private marker above, like the library's other
+calls. Before, it passed the caller's other options to the blob's `:create`
+action as they were.
+
+Who this affects: applications whose blob resource has the
+`AshStorage.Checks.AshStorageInteraction` bypass. With it, the blob
+resource's `:create` policies no longer decide who may start a direct upload.
+Without the bypass nothing changes. Other Ash options, such as `load:` or
+`domain:`, are no longer passed to the blob's create action.
+
+What to do: authorize the caller before you call
+`prepare_direct_upload/3`. The function has no host record and no host action
+to do it.

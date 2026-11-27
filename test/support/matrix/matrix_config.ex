@@ -13,6 +13,11 @@ defmodule AshStorage.Test.Matrix.Actor do
   use AshStorage.Test.MatrixResources, policies: :actor
 end
 
+defmodule AshStorage.Test.Matrix.Deny do
+  @moduledoc false
+  use AshStorage.Test.MatrixResources, policies: :deny
+end
+
 defmodule AshStorage.Test.MatrixConfig do
   @moduledoc false
   # The resource configurations the attach matrix runs under. Each is a map:
@@ -26,7 +31,7 @@ defmodule AshStorage.Test.MatrixConfig do
 
   alias AshStorage.Test.Matrix
 
-  def names, do: [:plain, :context, :attribute, :actor]
+  def names, do: [:plain, :context, :attribute, :actor, :deny]
 
   def build(:plain) do
     %{
@@ -53,6 +58,11 @@ defmodule AshStorage.Test.MatrixConfig do
 
   def build(:actor) do
     resources(Matrix.Actor, :actor, [actor: %{id: "actor"}], %{})
+  end
+
+  # Blob and attachment allow nothing but the library's own calls
+  def build(:deny) do
+    resources(Matrix.Deny, :deny, [actor: %{id: "actor"}], %{})
   end
 
   defp resources(module, name, caller, gaps) do

@@ -49,7 +49,12 @@ defmodule AshStorage.Pipeline.Purge do
   @spec destroy_variants(struct(), Scope.t(), Target.t() | nil) ::
           {:ok, [deletion()]} | {:error, term()}
   def destroy_variants(blob, %Scope{} = scope, target \\ nil) do
-    with {:ok, blob} <- Ash.load(blob, :variants, Scope.to_opts(scope)) do
+    with {:ok, blob} <-
+           Ash.load(
+             blob,
+             [variants: Scope.related(scope, blob.__struct__)],
+             Scope.to_opts(scope)
+           ) do
       Enum.reduce_while(blob.variants, {:ok, []}, fn variant, {:ok, acc} ->
         case destroy_variant(variant, scope, target) do
           {:ok, deletions} -> {:cont, {:ok, acc ++ deletions}}

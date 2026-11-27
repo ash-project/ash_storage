@@ -34,5 +34,8 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.Matrix.Actor.Blob
     resource AshStorage.Test.Matrix.Actor.Attachment
     resource AshStorage.Test.Matrix.Actor.Post
+    resource AshStorage.Test.Matrix.Deny.Blob
+    resource AshStorage.Test.Matrix.Deny.Attachment
+    resource AshStorage.Test.Matrix.Deny.Post
   end
 end
