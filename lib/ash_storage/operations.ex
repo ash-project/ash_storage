@@ -40,6 +40,10 @@ defmodule AshStorage.Operations do
   - `:metadata` - additional metadata map
   - `:actor` - the actor performing the operation
   - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def attach(record, attachment_name, io, opts \\ []) do
     {arg_opts, action_opts} = Keyword.split(opts, [:filename, :content_type, :metadata])
@@ -88,6 +92,10 @@ defmodule AshStorage.Operations do
   - `:metadata` - additional metadata map
   - `:actor` - the actor performing the operation
   - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def prepare_direct_upload(resource, attachment_name, opts \\ []) do
     with {:ok, target} <- resolve_for_direct_upload(resource, attachment_name),
@@ -139,6 +147,12 @@ defmodule AshStorage.Operations do
   ## Options
 
   - `:blob_id` - (required for `has_many_attached`) which attachment to detach
+  - `:actor` - the actor performing the operation
+  - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def detach(record, attachment_name, opts \\ []) do
     {arg_opts, action_opts} = Keyword.split(opts, [:blob_id])
@@ -161,6 +175,15 @@ defmodule AshStorage.Operations do
   Detach all attachments for a given name from a record.
 
   Calls the `:detach_<name>` action with `all: true`.
+
+  ## Options
+
+  - `:actor` - the actor performing the operation
+  - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def detach_all(record, attachment_name, opts \\ []) do
     args = %{all: true}
@@ -188,6 +211,10 @@ defmodule AshStorage.Operations do
   - `:all` - purge all attachments for this name (default: `false`)
   - `:actor` - the actor performing the operation
   - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def purge(record, attachment_name, opts \\ []) do
     {arg_opts, action_opts} = Keyword.split(opts, [:blob_id, :all])
@@ -228,6 +255,8 @@ defmodule AshStorage.Operations do
   ## Options
   - `:actor` - the current actor
   - `:tenant` - the current tenant
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def download(blob, opts \\ []) do
     ctx =
@@ -260,6 +289,8 @@ defmodule AshStorage.Operations do
   ## Options
   - `:actor` - the current actor
   - `:tenant` - the current tenant
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
   """
   def stream_download(blob, opts \\ []) do
     ctx = Target.blob_context(blob, Scope.from_opts(opts))
@@ -300,6 +331,17 @@ defmodule AshStorage.Operations do
 
   When `write_attributes` is configured on the analyzer, it finds the parent record
   via stored target info and writes the mapped values.
+
+  ## Options
+
+  - `:actor` - the actor performing the operation
+  - `:tenant` - the tenant
+  - `:authorize?` - whether to run authorization
+  - `:context` - context for the actions the call runs
+  - `:scope` - a value implementing `Ash.Scope.ToOpts` that supplies the
+    options above; options given explicitly win over the scope's
+
+  Without a tenant, the tenant recorded on the analyzer's entry is used.
   """
   def run_analyzer(blob, analyzer_module, opts \\ []) do
     AshStorage.Pipeline.Analysis.run_pending(blob, analyzer_module, opts)

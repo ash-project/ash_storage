@@ -521,3 +521,24 @@ The hook returns the record from the attach result, so the analyzers'
 `write_attributes` are on what the caller gets back. The attach runs inside
 the outer action's transaction, so a file it replaces is deleted before that
 transaction commits.
+
+## `scope:` on `AshStorage.Operations`
+
+What changed: the functions of `AshStorage.Operations` that take options
+accept `scope:`, a value implementing `Ash.Scope.ToOpts`, as Ash's 
+functions do. It supplies the actor, tenant, `authorize?`, tracer and context;
+options given explicitly win over the scope's. `attach/4`, `detach/3`,
+`detach_all/3` and `purge/3` already passed it to the host action;
+`prepare_direct_upload/3`, `download/2`, `stream_download/2` and
+`run_analyzer/3` now read it too. A context given explicitly is merged with
+the scope's, its keys winning, as Ash does.
+
+AshStorage now requires Ash 3.5.27 or later. `Ash.Scope` exists from 3.5.13,
+and from 3.5.27 Ash's handling of `scope:` merges the scope's context
+with the caller's, which the functions that hand `scope:` on to Ash rely on.
+
+Who this affects: applications on Ash 3.5.0 to 3.5.26, which have to update
+Ash. Nothing else changes for code that works today.
+
+What to do: update Ash to 3.5.27 or later if you are on an older 3.5. Pass
+`scope:` instead of `actor:` and `tenant:` if you prefer.

@@ -55,6 +55,41 @@ defmodule AshStorage.Pipeline.ScopeTest do
              %Scope{actor: :me, tenant: "t", authorize?: true, tracer: T, context: %{}}
   end
 
+  describe "from_opts/1 with a scope" do
+    test "takes the scope's values, and explicit options win" do
+      scope = %{actor: :scoped, tenant: "t", authorize?: false}
+
+      assert %Scope{actor: :explicit, tenant: "t", authorize?: false} =
+               Scope.from_opts(scope: scope, actor: :explicit)
+    end
+
+    test "merges the scope's context with the explicit one, explicit keys winning" do
+      scope = %{context: %{shared: %{x: 1, y: 1}}}
+
+      assert Scope.from_opts(scope: scope, context: %{shared: %{y: 2}}).context ==
+               %{shared: %{x: 1, y: 2}}
+
+      assert Scope.from_opts(scope: scope).context == %{shared: %{x: 1, y: 1}}
+      assert Scope.from_opts(context: %{shared: %{y: 2}}).context == %{shared: %{y: 2}}
+    end
+
+    test "keeps the scope's context when the explicit one is nil" do
+      scope = %{context: %{shared: %{x: 1}}}
+
+      assert Scope.from_opts(scope: scope, context: nil).context == %{shared: %{x: 1}}
+
+      assert Scope.from_opts(scope: scope, context: %{shared: %{x: nil}}).context ==
+               %{shared: %{x: nil}}
+    end
+
+    test "lets an explicit struct win whole instead of merging into it" do
+      scope = %{context: %{shared: %{at: ~U[2026-02-02 10:00:00Z], meta: %{extra: 1}}}}
+      explicit = %{shared: %{at: ~D[2026-01-01], meta: ~D[2026-03-03]}}
+
+      assert Scope.from_opts(scope: scope, context: explicit).context == explicit
+    end
+  end
+
   test "from_calculation/1 reads the calculation context" do
     context = %Ash.Resource.Calculation.Context{actor: :me, tenant: "t", authorize?: false}
 

@@ -32,9 +32,18 @@ defmodule AshStorage.Pipeline.Scope do
     }
   end
 
-  @doc "The scope of a direct call that takes Ash options."
+  @doc """
+  The scope of a direct call that takes Ash options. A `:scope` is expanded
+  with `Ash.Scope.to_opts/2`.
+  """
   @spec from_opts(keyword()) :: t()
   def from_opts(opts) do
+    opts =
+      case Keyword.pop(opts, :scope) do
+        {nil, opts} -> opts
+        {scope, opts} -> apply_scope(scope, opts)
+      end
+
     %__MODULE__{
       actor: opts[:actor],
       tenant: opts[:tenant],
@@ -43,6 +52,36 @@ defmodule AshStorage.Pipeline.Scope do
       context: opts[:context]
     }
   end
+
+  # As Ash does for `scope:` on its own functions: explicit options win over
+  # the scope's, and the two contexts are merged, explicit keys winning
+  defp apply_scope(scope, opts) do
+    scope_opts = Ash.Scope.to_opts(scope)
+    merged = Keyword.merge(scope_opts, opts)
+
+    if Keyword.has_key?(scope_opts, :context) and Keyword.has_key?(opts, :context) do
+      Keyword.put(merged, :context, deep_merge(scope_opts[:context], opts[:context]))
+    else
+      merged
+    end
+  end
+
+  # A `nil` context keeps the other. Below that: an empty map keeps the other
+  # side, plain maps merge key by key, and anything else, a struct or `nil`
+  # included, is taken whole from the right.
+  defp deep_merge(left, nil), do: left
+  defp deep_merge(nil, right), do: right
+  defp deep_merge(left, right), do: merge_values(left, right)
+
+  defp merge_values(left, right) when left == %{}, do: right
+  defp merge_values(left, right) when right == %{}, do: left
+
+  defp merge_values(left, right)
+       when is_map(left) and is_map(right) and not is_struct(left) and not is_struct(right) do
+    Map.merge(left, right, fn _key, l, r -> merge_values(l, r) end)
+  end
+
+  defp merge_values(_left, right), do: right
 
   @doc "Sets the tenant when the scope has none."
   @spec put_new_tenant(t(), term()) :: t()
