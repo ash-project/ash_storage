@@ -25,11 +25,14 @@ defmodule AshStorage.Test.Domain do
     resource AshStorage.Test.Tenant
     resource AshStorage.Test.KeyRulesPost
     resource AshStorage.Test.MatrixPost
-    resource AshStorage.Test.TenantMatrixBlob
-    resource AshStorage.Test.TenantMatrixAttachment
-    resource AshStorage.Test.TenantMatrixPost
-    resource AshStorage.Test.PolicyMatrixBlob
-    resource AshStorage.Test.PolicyMatrixAttachment
-    resource AshStorage.Test.PolicyMatrixPost
+    resource AshStorage.Test.Matrix.Context.Blob
+    resource AshStorage.Test.Matrix.Context.Attachment
+    resource AshStorage.Test.Matrix.Context.Post
+    resource AshStorage.Test.Matrix.Attribute.Blob
+    resource AshStorage.Test.Matrix.Attribute.Attachment
+    resource AshStorage.Test.Matrix.Attribute.Post
+    resource AshStorage.Test.Matrix.Actor.Blob
+    resource AshStorage.Test.Matrix.Actor.Attachment
+    resource AshStorage.Test.Matrix.Actor.Post
   end
 end
